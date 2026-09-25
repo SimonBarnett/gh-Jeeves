@@ -1,4 +1,4 @@
-"""Stub GIT + report webhook receiver for G1 (loopback only)."""
+"""Stub GIT + report + intake webhook receiver for G1 (loopback only)."""
 
 from __future__ import annotations
 
@@ -10,16 +10,27 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .announce import process_git_webhook
+from .intake import (
+    FakeGitHubFiler,
+    IntakeConfig,
+    RateLimiter,
+    get_intake_status,
+    process_intake,
+)
 from .queue import apply_queue_event, load_queue, save_queue
 
 
 class DigestState:
-    def __init__(self, home: Path):
+    def __init__(self, home: Path, *, intake_cfg: IntakeConfig | None = None):
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
         self.announces: list[str] = []
         self.events: list[dict[str, Any]] = []
+        self.intake_cfg = intake_cfg or IntakeConfig()
+        self.intake_filer = FakeGitHubFiler()
+        self.intake_rate = RateLimiter(self.intake_cfg.rate_per_min)
+        self.intake_logs: list[str] = []
 
     def chair_outbox_path(self) -> Path:
         return self.home / "chair-outbox.txt"
@@ -44,13 +55,24 @@ def make_handler(state: DigestState):
         def log_message(self, fmt: str, *args) -> None:  # noqa: A003
             return
 
-        def _read_json(self) -> dict:
+        def _read_raw(self) -> bytes:
             length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length) if length else b"{}"
+            return self.rfile.read(length) if length else b"{}"
+
+        def _read_json(self) -> dict:
+            raw = self._read_raw()
             try:
                 return json.loads(raw.decode("utf-8"))
             except json.JSONDecodeError:
                 return {}
+
+        def _send_json(self, code: int, obj: dict) -> None:
+            body = json.dumps(obj).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
@@ -61,6 +83,16 @@ def make_handler(state: DigestState):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if path.startswith("/bob/v1/intake/"):
+                iid = path[len("/bob/v1/intake/") :].strip("/")
+                if not iid or "/" in iid:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                with state.lock:
+                    code, obj = get_intake_status(state.home, iid)
+                self._send_json(code, obj)
                 return
             self.send_response(404)
             self.end_headers()
@@ -82,9 +114,30 @@ def make_handler(state: DigestState):
                         state.append_outbox(line)
                     if claim is not None:
                         tag = apply_queue_event(state.home, claim)
-                        state.events.append({"event": event, "claim": claim.task, "tag": tag, "id": claim.id})
+                        state.events.append(
+                            {"event": event, "claim": claim.task, "tag": tag, "id": claim.id}
+                        )
                 self.send_response(204)
                 self.end_headers()
+                return
+            if path in ("/bob/v1/intake", "/bob/v1/intake/"):
+                payload = self._read_json()
+                client_ip = self.client_address[0] if self.client_address else "0.0.0.0"
+                key = self.headers.get("X-Bob-Intake-Key") or ""
+                with state.lock:
+                    result = process_intake(
+                        state.home,
+                        payload,
+                        filer=state.intake_filer,
+                        cfg=state.intake_cfg,
+                        client_ip=client_ip,
+                        intake_key_header=key,
+                        rate=state.intake_rate,
+                    )
+                    if result.log_safe:
+                        state.intake_logs.append(result.log_safe)
+                    state.events.append({"intake": result.body, "status": result.status})
+                self._send_json(result.status, result.body)
                 return
             if path == "/bob/v1/report":
                 payload = self._read_json()
@@ -93,11 +146,9 @@ def make_handler(state: DigestState):
                     op = str(payload.get("op") or "")
                     q = load_queue(state.home)
                     nick = str(payload.get("nick") or "")
-                    # K3: queue_accept mirrors accepted row onto digest (source of truth).
                     if op == "queue_accept":
                         row = payload.get("accepted_row")
                         if isinstance(row, dict) and row.get("repo") and row.get("id"):
-                            # drop from unaccepted if still present
                             rid = str(row.get("id"))
                             rrepo = str(row.get("repo"))
                             rtask = str(row.get("task") or "").upper()
@@ -110,7 +161,6 @@ def make_handler(state: DigestState):
                                     and str(r.get("task") or "").upper() == rtask
                                 )
                             ]
-                            # de-dupe accepted
                             q["accepted"] = [
                                 r
                                 for r in (q.get("accepted") or [])
@@ -145,15 +195,23 @@ def make_handler(state: DigestState):
                             save_queue(state.home, q)
                 self.send_response(204)
                 self.end_headers()
-                return            self.send_response(404)
+                return
+            self.send_response(404)
             self.end_headers()
 
     return Handler
 
 
 class StubReceiver:
-    def __init__(self, home: Path, host: str = "127.0.0.1", port: int = 0):
-        self.state = DigestState(home)
+    def __init__(
+        self,
+        home: Path,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        *,
+        intake_cfg: IntakeConfig | None = None,
+    ):
+        self.state = DigestState(home, intake_cfg=intake_cfg)
         self.host = host
         self.port = port
         self._httpd: HTTPServer | None = None
