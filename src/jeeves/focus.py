@@ -1,6 +1,7 @@
-"""FR #68: !focus priority-sort for !list and ear !bored (top_unaccepted).
+"""FR #68 / #113: !focus priority-sort for !list and Jeeves assign-on-!bored.
 
 Token-less. One sort feeds list + bored. Ignored repos stay hidden (#75).
+FR #113: item keys ``owner/repo#N`` (or short ``repo#N``) rank ahead of repo focus.
 """
 
 from __future__ import annotations
@@ -24,6 +25,11 @@ DEFAULT_PRIORITY = NAMED_PRIORITY["high"]
 UNFOCUSED_RANK = 10_000  # after all focused
 
 _REPO_TOKEN = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?$")
+# owner/repo#123 or repo#123 (optional spaces around #)
+_ITEM_TOKEN = re.compile(
+    r"^([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)\s*#\s*(\d+)\s*$",
+    re.I,
+)
 _FOCUS_CMD = re.compile(r"^!+\s*focus(?:\s+(.*))?$", re.I)
 _UNFOCUS_CMD = re.compile(r"^!+\s*unfocus(?:\s+(.*))?$", re.I)
 
@@ -33,7 +39,7 @@ def focus_path(home: Path) -> Path:
 
 
 def empty_focus() -> dict[str, Any]:
-    return {"v": FOCUS_VERSION, "repos": {}}
+    return {"v": FOCUS_VERSION, "repos": {}, "items": {}, "item_seq": 0}
 
 
 def _utc_now() -> str:
@@ -51,9 +57,73 @@ def normalize_repo(token: str) -> str | None:
             s = s[len(prefix) :]
             break
     s = s.strip().strip("/")
+    # strip trailing #N if accidentally included
+    if "#" in s and _ITEM_TOKEN.match(s):
+        return None
     if not _REPO_TOKEN.match(s):
         return None
     return s
+
+
+def normalize_item_ref(token: str) -> tuple[str, str, str] | None:
+    """Return (repo_token, #id, canonical_key) for owner/repo#N or repo#N / URL#N."""
+    s = (token or "").strip().strip("{}").strip()
+    if not s:
+        return None
+    s = s.rstrip(".,;:!?)")
+    for prefix in ("https://github.com/", "http://github.com/"):
+        if s.lower().startswith(prefix):
+            s = s[len(prefix) :]
+            # issues/N or pull/N → #N
+            m_url = re.match(
+                r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/(\d+)\s*$",
+                s,
+                re.I,
+            )
+            if m_url:
+                repo = m_url.group(1)
+                ident = f"#{int(m_url.group(2))}"
+                return repo, ident, f"{repo}#{ident.lstrip('#')}"
+            break
+    m = _ITEM_TOKEN.match(s)
+    if not m:
+        return None
+    repo = m.group(1)
+    ident = f"#{int(m.group(2))}"
+    return repo, ident, f"{repo}#{ident.lstrip('#')}"
+
+
+def _clean_items(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: dict[str, Any] = {}
+    for k, v in raw.items():
+        parsed = normalize_item_ref(str(k or ""))
+        if not parsed:
+            continue
+        repo, ident, key = parsed
+        if isinstance(v, dict):
+            rank = int(v.get("rank") or v.get("priority") or DEFAULT_PRIORITY)
+            cleaned[key] = {
+                "rank": max(1, rank),
+                "repo": str(v.get("repo") or repo),
+                "id": str(v.get("id") or ident),
+                "label": str(v.get("label") or _label_for_priority(rank)),
+                "ts": str(v.get("ts") or ""),
+            }
+        else:
+            try:
+                rank = int(v)
+            except (TypeError, ValueError):
+                rank = DEFAULT_PRIORITY
+            cleaned[key] = {
+                "rank": max(1, rank),
+                "repo": repo,
+                "id": ident,
+                "label": _label_for_priority(rank),
+                "ts": "",
+            }
+    return cleaned
 
 
 def load_focus(home: Path) -> dict[str, Any]:
@@ -108,6 +178,11 @@ def load_focus(home: Path) -> dict[str, Any]:
                     "ts": "",
                 }
         doc["repos"] = cleaned
+    doc["items"] = _clean_items(doc.get("items"))
+    try:
+        doc["item_seq"] = int(doc.get("item_seq") or 0)
+    except (TypeError, ValueError):
+        doc["item_seq"] = 0
     return doc
 
 
@@ -118,6 +193,8 @@ def save_focus(home: Path, doc: dict[str, Any]) -> None:
     payload = {
         "v": int(doc.get("v") or FOCUS_VERSION),
         "repos": dict(doc.get("repos") or {}),
+        "items": dict(doc.get("items") or {}),
+        "item_seq": int(doc.get("item_seq") or 0),
         "updated": doc.get("updated") or _utc_now(),
     }
     tmp = path.with_suffix(".tmp")
@@ -201,18 +278,245 @@ def focus_label_for_repo(home: Path, repo: str) -> str | None:
     return None
 
 
+def _norm_id(ident: str) -> str:
+    s = str(ident or "").strip()
+    if not s:
+        return ""
+    return s if s.startswith("#") else f"#{s}"
+
+
+def item_focus_map(home: Path) -> dict[str, dict[str, Any]]:
+    return dict(load_focus(home).get("items") or {})
+
+
+def item_rank_for_row(home: Path, row: dict[str, Any]) -> int | None:
+    """Return item focus rank if this queue row is item-focused."""
+    items = item_focus_map(home)
+    if not items:
+        return None
+    repo = str(row.get("repo") or "").strip()
+    ident = _norm_id(str(row.get("id") or ""))
+    if not repo or not ident:
+        return None
+    repo_l = repo.lower()
+    short_l = repo.rsplit("/", 1)[-1].lower()
+    id_n = ident.lstrip("#")
+    for key, meta in items.items():
+        parsed = normalize_item_ref(key)
+        if not parsed:
+            continue
+        k_repo, k_id, _ = parsed
+        k_repo_l = k_repo.lower()
+        k_short = k_repo.rsplit("/", 1)[-1].lower()
+        if _norm_id(k_id).lstrip("#") != id_n:
+            continue
+        if k_repo_l == repo_l or ("/" not in k_repo and k_short == short_l):
+            return int(meta.get("rank") or DEFAULT_PRIORITY)
+        if "/" in k_repo and k_short == short_l and "/" not in repo:
+            return int(meta.get("rank") or DEFAULT_PRIORITY)
+    return None
+
+
 def sort_unaccepted_rows(home: Path, rows: list[dict]) -> list[dict]:
     """
-    Single sort for !list and !bored: focus priority ascending, then seq ascending.
-    Ignored filtering is caller's responsibility (or apply before).
+    Single sort for !list and !bored (FR #113):
+    1) item-focused rows by rank ascending
+    2) else repo focus priority ascending
+    3) then seq ascending
     """
     decorated = []
     for r in rows:
         repo = str(r.get("repo") or "")
         seq = int(r.get("seq") or 0)
-        decorated.append((sort_rank(home, repo), seq, r))
-    decorated.sort(key=lambda t: (t[0], t[1]))
-    return [t[2] for t in decorated]
+        ir = item_rank_for_row(home, r)
+        if ir is not None:
+            decorated.append((0, ir, seq, r))
+        else:
+            decorated.append((1, sort_rank(home, repo), seq, r))
+    decorated.sort(key=lambda t: (t[0], t[1], t[2]))
+    return [t[3] for t in decorated]
+
+
+def set_item_focus(
+    home: Path,
+    item_token: str,
+    *,
+    rank: int | None = None,
+    label: str | None = None,
+) -> tuple[str, str | None, int]:
+    """Focus a single issue/PR. Returns (status, canonical_key, rank)."""
+    parsed = normalize_item_ref(item_token)
+    if not parsed:
+        return "bad", None, 0
+    repo, ident, key = parsed
+    doc = load_focus(home)
+    items = dict(doc.get("items") or {})
+    # drop case-insensitive duplicate keys
+    key_l = key.lower()
+    items = {k: v for k, v in items.items() if k.lower() != key_l}
+    if rank is None:
+        seq = int(doc.get("item_seq") or 0) + 1
+        doc["item_seq"] = seq
+        rk = seq
+    else:
+        rk = max(1, int(rank))
+    lab = label or _label_for_priority(rk if rk in NAMED_PRIORITY.values() else rk)
+    if rk in NAMED_PRIORITY.values():
+        lab = label or _label_for_priority(rk)
+    elif label:
+        lab = label
+    else:
+        lab = str(rk)
+    items[key] = {
+        "rank": rk,
+        "repo": repo,
+        "id": ident,
+        "label": lab,
+        "ts": _utc_now(),
+    }
+    doc["items"] = items
+    doc["updated"] = _utc_now()
+    save_focus(home, doc)
+    return "set", key, rk
+
+
+def remove_item_focus(home: Path, item_token: str) -> tuple[str, str | None]:
+    parsed = normalize_item_ref(item_token)
+    if not parsed:
+        return "bad", None
+    repo, ident, key = parsed
+    doc = load_focus(home)
+    items = dict(doc.get("items") or {})
+    short = repo.rsplit("/", 1)[-1].lower()
+    id_n = ident.lstrip("#")
+    kept: dict[str, Any] = {}
+    removed = False
+    for k, v in items.items():
+        p = normalize_item_ref(k)
+        if not p:
+            kept[k] = v
+            continue
+        kr, kid, _ = p
+        if kid.lstrip("#") == id_n and (
+            kr.lower() == repo.lower() or kr.rsplit("/", 1)[-1].lower() == short
+        ):
+            removed = True
+            continue
+        kept[k] = v
+    if not removed:
+        return "missing", key
+    doc["items"] = kept
+    doc["updated"] = _utc_now()
+    save_focus(home, doc)
+    return "removed", key
+
+
+def purge_stale_item_focus(home: Path) -> list[str]:
+    """Drop item focus when the issue/PR is closed or merged (present in done).
+
+    Absence from unaccepted alone is not enough — simon may focus before enqueue.
+    """
+    from .queue import load_queue
+
+    doc = load_focus(home)
+    items = dict(doc.get("items") or {})
+    if not items:
+        return []
+    q = load_queue(home)
+    done_ids: set[tuple[str, str]] = set()
+    for row in q.get("done") or []:
+        if not isinstance(row, dict):
+            continue
+        repo = str(row.get("repo") or "").strip().lower()
+        ident = _norm_id(str(row.get("id") or "")).lstrip("#")
+        if not repo or not ident:
+            continue
+        result = str(row.get("result") or "").lower()
+        # Treat any done row as terminal for item focus (closed/merged/ok).
+        done_ids.add((repo, ident))
+        done_ids.add((repo.rsplit("/", 1)[-1], ident))
+        _ = result  # reserved for finer filters later
+    # Also: still live in unaccepted/accepted → keep even if also in done history
+    live: set[tuple[str, str]] = set()
+    for bucket in ("unaccepted", "accepted"):
+        for row in q.get(bucket) or []:
+            if not isinstance(row, dict):
+                continue
+            repo = str(row.get("repo") or "").strip().lower()
+            ident = _norm_id(str(row.get("id") or "")).lstrip("#")
+            if repo and ident:
+                live.add((repo, ident))
+                live.add((repo.rsplit("/", 1)[-1], ident))
+    removed: list[str] = []
+    kept: dict[str, Any] = {}
+    for k, v in items.items():
+        parsed = normalize_item_ref(k)
+        if not parsed:
+            removed.append(k)
+            continue
+        repo, ident, key = parsed
+        repo_l = repo.lower()
+        short = repo.rsplit("/", 1)[-1].lower()
+        id_n = ident.lstrip("#")
+        if (repo_l, id_n) in live or (short, id_n) in live:
+            kept[key] = v
+            continue
+        if (repo_l, id_n) in done_ids or (short, id_n) in done_ids:
+            removed.append(key)
+            continue
+        kept[key] = v
+    if removed:
+        doc["items"] = kept
+        doc["updated"] = _utc_now()
+        save_focus(home, doc)
+    return removed
+
+
+def retarget_item_focus(
+    home: Path,
+    repo: str,
+    old_id: str,
+    *,
+    new_id: str,
+) -> str | None:
+    """Move item focus from FR #old to MRB/UAT #new (same repo). Returns new key or None."""
+    doc = load_focus(home)
+    items = dict(doc.get("items") or {})
+    old = _norm_id(old_id)
+    new = _norm_id(new_id)
+    repo_s = (repo or "").strip()
+    if not repo_s or not old or not new:
+        return None
+    repo_l = repo_s.lower()
+    short = repo_s.rsplit("/", 1)[-1].lower()
+    old_n = old.lstrip("#")
+    hit_key = None
+    hit_meta = None
+    for k, v in list(items.items()):
+        parsed = normalize_item_ref(k)
+        if not parsed:
+            continue
+        kr, kid, _ = parsed
+        if kid.lstrip("#") != old_n:
+            continue
+        if kr.lower() == repo_l or kr.rsplit("/", 1)[-1].lower() == short:
+            hit_key = k
+            hit_meta = dict(v)
+            break
+    if not hit_key or hit_meta is None:
+        return None
+    items.pop(hit_key, None)
+    new_key = f"{repo_s}#{new.lstrip('#')}"
+    # drop any existing new_key
+    items = {k: v for k, v in items.items() if k.lower() != new_key.lower()}
+    hit_meta["repo"] = repo_s
+    hit_meta["id"] = new
+    hit_meta["ts"] = _utc_now()
+    items[new_key] = hit_meta
+    doc["items"] = items
+    doc["updated"] = _utc_now()
+    save_focus(home, doc)
+    return new_key
 
 
 def set_focus(
@@ -289,21 +593,38 @@ def remove_focus(home: Path, repo_token: str) -> tuple[str, str | None]:
 
 
 def list_focus_entries(home: Path) -> list[tuple[str, int, str]]:
-    """Sorted (repo, priority, label) for !focus bare list."""
+    """Sorted (repo, priority, label) for !focus bare list (repos only)."""
     m = focus_map(home)
     rows = [(k, int(v.get("priority") or DEFAULT_PRIORITY), str(v.get("label") or "")) for k, v in m.items()]
     rows.sort(key=lambda t: (t[1], t[0].lower()))
     return rows
 
 
+def list_item_focus_entries(home: Path) -> list[tuple[str, int, str]]:
+    """Sorted (item_key, rank, label); purges stale first."""
+    purge_stale_item_focus(home)
+    m = item_focus_map(home)
+    rows = [(k, int(v.get("rank") or DEFAULT_PRIORITY), str(v.get("label") or "")) for k, v in m.items()]
+    rows.sort(key=lambda t: (t[1], t[0].lower()))
+    return rows
+
+
 def format_focus_lines(home: Path) -> list[str]:
-    rows = list_focus_entries(home)
-    if not rows:
+    items = list_item_focus_entries(home)
+    repos = list_focus_entries(home)
+    if not items and not repos:
         return ["focus: (none)"]
-    out = [f"focus ({len(rows)}):"]
-    for repo, pr, lab in rows:
-        tag = lab if lab in NAMED_PRIORITY else str(pr)
-        out.append(f"  {pr} ({tag}) {repo}")
+    out: list[str] = []
+    if items:
+        out.append(f"focus items ({len(items)}):")
+        for key, rk, lab in items:
+            tag = lab if lab in NAMED_PRIORITY else str(rk)
+            out.append(f"  {rk} ({tag}) {key}")
+    if repos:
+        out.append(f"focus repos ({len(repos)}):")
+        for repo, pr, lab in repos:
+            tag = lab if lab in NAMED_PRIORITY else str(pr)
+            out.append(f"  {pr} ({tag}) {repo}")
     return out
 
 
@@ -313,39 +634,81 @@ def handle_focus_cmd(home: Path, arg: str) -> list[str]:
     if not raw:
         return format_focus_lines(home)
     parts = raw.split()
+
+    def _try_item(tok: str, rank: int | None, lab: str | None) -> list[str] | None:
+        if normalize_item_ref(tok) is None:
+            return None
+        st, canon, rk = set_item_focus(home, tok, rank=rank, label=lab)
+        if st == "bad":
+            return ["focus: bad item (use owner/repo#N or repo#N)"]
+        return [f"focus: item {canon} rank={rk}"]
+
     if len(parts) == 1:
-        # bare repo → high
+        item_try = _try_item(parts[0], None, "high")
+        if item_try is not None:
+            return item_try
         st, canon, pr = set_focus(home, parts[0], priority=DEFAULT_PRIORITY, label="high")
         if st == "bad":
-            return ["focus: bad repo (use owner/name or URL)"]
+            return ["focus: bad repo/item (use owner/name, owner/repo#N, or URL)"]
         return [f"focus: {canon} priority={pr} (high)"]
-    # first token priority?
+
+    # first token priority/rank?
     pri = parse_priority_token(parts[0])
     if pri is not None:
         pr, lab = pri
-        repo_tok = " ".join(parts[1:]).strip()
-        if not repo_tok:
-            return ["focus: usage !focus [n|high|medium|low] {repo}"]
-        st, canon, pr2 = set_focus(home, repo_tok, priority=pr, label=lab)
+        rest = " ".join(parts[1:]).strip()
+        if not rest:
+            return ["focus: usage !focus [n|high|medium|low] {repo|repo#N}"]
+        item_try = _try_item(rest, pr, lab)
+        if item_try is not None:
+            return item_try
+        st, canon, pr2 = set_focus(home, rest, priority=pr, label=lab)
         if st == "bad":
             return ["focus: bad repo (use owner/name or URL)"]
         return [f"focus: {canon} priority={pr2} ({lab})"]
+
+    # item then optional rank: owner/repo#N 3
+    if len(parts) >= 2 and normalize_item_ref(parts[0]) is not None:
+        pri2 = parse_priority_token(parts[1])
+        if pri2 is not None:
+            pr, lab = pri2
+            return _try_item(parts[0], pr, lab) or ["focus: bad item"]
+        # ignore trailing junk — still set item
+        return _try_item(parts[0], None, "high") or ["focus: bad item"]
+
     # multi-token repo URL without priority
+    item_try = _try_item(raw, None, "high")
+    if item_try is not None:
+        return item_try
     st, canon, pr = set_focus(home, raw, priority=DEFAULT_PRIORITY, label="high")
     if st == "bad":
-        return ["focus: usage !focus [n|high|medium|low] {repo}"]
+        return ["focus: usage !focus [n|high|medium|low] {repo|owner/repo#N}"]
     return [f"focus: {canon} priority={pr} (high)"]
 
 
 def handle_unfocus_cmd(home: Path, arg: str) -> list[str]:
     raw = (arg or "").strip()
     if not raw:
-        return ["unfocus: usage !unfocus {repo}|all"]
+        return ["unfocus: usage !unfocus {repo|repo#N}|all"]
+    if normalize_item_ref(raw) is not None:
+        st, canon = remove_item_focus(home, raw)
+        if st == "bad":
+            return ["unfocus: bad item"]
+        if st == "missing":
+            return [f"unfocus: {canon} was not focused"]
+        return [f"unfocus: removed {canon}"]
     st, canon = remove_focus(home, raw)
     if st == "bad":
         return ["unfocus: bad repo"]
     if st == "cleared":
-        return [f"unfocus: cleared {canon} entries"]
+        # also clear items on !unfocus all
+        doc = load_focus(home)
+        n_items = len(doc.get("items") or {})
+        doc["items"] = {}
+        doc["item_seq"] = 0
+        doc["updated"] = _utc_now()
+        save_focus(home, doc)
+        return [f"unfocus: cleared {canon} repo + {n_items} item entries"]
     if st == "missing":
         return [f"unfocus: {canon} was not focused"]
     return [f"unfocus: removed {canon}"]
@@ -375,11 +738,13 @@ def is_unfocus_cmd(body: str) -> bool:
 
 
 def focus_public_list(home: Path) -> list[dict[str, Any]]:
-    """Digest-safe list: [{repo, priority, label}, ...] sorted."""
-    return [
-        {"repo": r, "priority": p, "label": lab}
-        for r, p, lab in list_focus_entries(home)
-    ]
+    """Digest-safe list: items first, then repos."""
+    out: list[dict[str, Any]] = []
+    for key, rk, lab in list_item_focus_entries(home):
+        out.append({"item": key, "rank": rk, "label": lab, "kind": "item"})
+    for r, p, lab in list_focus_entries(home):
+        out.append({"repo": r, "priority": p, "label": lab, "kind": "repo"})
+    return out
 
 
 def may_mutate_focus(nick: str, *, account: str | None = None, mode_grants_live: bool = False) -> bool:
