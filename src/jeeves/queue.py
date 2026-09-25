@@ -352,6 +352,14 @@ def apply_queue_event(home: Path, claim: Claim) -> str:
         _remove_tasks_for_ids(doc, repo, (ident, pr_id or ident), {"MRB"})
         _append_unaccepted(doc, claim)
         save_queue(home, doc)
+        # FR #113: carry item !focus from linked FR → this MRB
+        try:
+            from .focus import retarget_item_focus
+
+            for fr in links:
+                retarget_item_focus(home, repo, fr, new_id=ident)
+        except Exception:
+            pass
         return "enqueued:MRB"
 
     if task == "UAT":

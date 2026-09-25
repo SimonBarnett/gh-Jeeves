@@ -127,25 +127,24 @@ def _reg() -> tuple[CommandSpec, ...]:
         ),
         CommandSpec(
             name="focus",
-            syntax="!focus [n|high|medium|low] {repo}",
-            summary="priority-sort !list and !bored offers (simon account)",
+            syntax="!focus [n|high|medium|low] {repo|owner/repo#N}",
+            summary="priority-sort !list and assign-on-!bored (simon account)",
             roles=frozenset({ROLE_SIMON}),
-            example="!focus high SimonBarnett/gh-Jeeves",
+            example="!focus SimonBarnett/gh-Jeeves#110",
             details=(
-                "FR #68: persists focus.json beside queue.json. Lower number first "
-                "(high=1, medium=5, low=9). Bare !focus lists; bare !focus {repo} = high. "
-                "Same sort for !list and ear top_unaccepted. Ignored repos stay hidden. "
+                "FR #68/#113: focus.json beside queue. Items (owner/repo#N) rank ahead of "
+                "repo focus. Lower number first. Bare !focus lists items then repos. "
                 "PM only. Simon services account (like !sweep)."
             ),
             related=("unfocus", "list"),
         ),
         CommandSpec(
             name="unfocus",
-            syntax="!unfocus {repo}|all",
-            summary="remove a repo from focus or clear all (simon account)",
+            syntax="!unfocus {repo|owner/repo#N}|all",
+            summary="remove repo/item focus or clear all (simon account)",
             roles=frozenset({ROLE_SIMON}),
-            example="!unfocus all",
-            details="FR #68: drops focus entries; queue order returns to seq-only for those repos.",
+            example="!unfocus SimonBarnett/gh-Jeeves#110",
+            details="FR #68/#113: drops focus entries; !unfocus all clears repos and items.",
             related=("focus", "list"),
         ),
     )
