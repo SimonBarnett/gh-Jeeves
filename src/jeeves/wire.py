@@ -17,7 +17,8 @@ _NACK = re.compile(
     r"^(NACK|GIVEUP)\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\s*$",
     re.I,
 )
-_BORED = re.compile(r"^!bored\s*$", re.I)
+# !bored / !BORED / optional trailing junk stripped — ear owns this command.
+_BORED = re.compile(r"^!+\s*bored\b", re.I)
 _LIST = re.compile(r"^!list\s*$", re.I)
 
 
@@ -38,6 +39,7 @@ class DoneMsg:
 
 
 def is_bored(body: str) -> bool:
+    """True for worker idle pings. Ear handles; chair must ignore (K1)."""
     return bool(_BORED.match((body or "").strip()))
 
 
