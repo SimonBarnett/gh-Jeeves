@@ -173,3 +173,80 @@ def test_chair_wires_mode_grants_on_bob_join(tmp_path: Path):
     bob.close()
     rx.stop()
     ircd.stop()
+
+
+def test_wrong_bob_account_gets_nothing():
+    assert (
+        desired_mode(Presence("bob-flamingo", "evil", "x", "#bobiverse")) is None
+    )
+
+
+def test_tls_client_surface_has_send_raw_on_raw():
+    """Production TlsIrcClient must expose ModeGrantController hooks (MRB #58 fix)."""
+    from jeeves.tls_irc import TlsIrcClient
+
+    assert hasattr(TlsIrcClient, "send_raw")
+    # instance attrs set in __init__; check annotations / source contract via dir on class + unbound
+    src = Path(__file__).resolve().parents[1] / "src" / "jeeves" / "tls_irc.py"
+    text = src.read_text(encoding="utf-8")
+    assert "def send_raw" in text
+    assert "self.on_raw" in text
+    assert "account-notify" in text
+    assert "extended-join" in text
+
+
+def test_names_353_resweeps_after_self_join():
+    client = _Raw()
+    ctrl = ModeGrantController(client, rate_s=0.0)
+    ctrl.set_account("bob-marchhare", "bob-marchhare")
+    ctrl.set_host("bob-marchhare", "marchhare.host")
+    # Jeeves joins → pending sweep
+    assert ctrl.on_join("Jeeves", "#bobiverse") is None
+    assert "#bobiverse" in ctrl.state.pending_sweep
+    # 353 arrives with bob already present
+    ctrl.handle_raw(":local 353 Jeeves = #bobiverse :@Jeeves bob-marchhare")
+    assert any("+h bob-marchhare" in m for m in client.lines)
+    assert "#bobiverse" not in ctrl.state.pending_sweep
+
+
+def test_sweep_command_simon_only(tmp_path: Path):
+    from jeeves.wire import is_sweep, parse_sweep
+
+    assert parse_sweep("!sweep #bobiverse") == "#bobiverse"
+    assert parse_sweep("!sweep") == ""
+    assert is_sweep("!sweep")
+    assert not is_sweep("!help")
+
+    home = tmp_path / "d"
+    home.mkdir()
+    ircd = LocalIrcd()
+    port = ircd.start()
+    rx = StubReceiver(home)
+    rport = rx.start()
+    chair = JeevesChair(
+        "127.0.0.1",
+        port,
+        home,
+        f"http://127.0.0.1:{rport}",
+        shops=["#bobiverse"],
+    )
+    chair.mode_grants.rate_s = 0.0
+    chair.mode_grants.set_account("bob-ionos", "bob-ionos")
+    chair.mode_grants.set_host("bob-ionos", "ionos")
+    # unauth simon denied
+    chair._handle_sweep("simon", "#bobiverse", "!sweep #bobiverse")
+    assert "sweep_denied_unauth" in chair.handled
+    # auth simon
+    chair.handled.clear()
+    chair.mode_grants.set_account("simon", "simon")
+    chair.mode_grants.set_host("simon", "marchhare.host")
+    chair._handle_sweep("simon", "#bobiverse", "!sweep #bobiverse")
+    assert any(h.startswith("sweep:#bobiverse:") for h in chair.handled)
+    assert any("+h bob-ionos" in m for m in chair.mode_grants.state.mode_sent)
+    # worker nick denied
+    chair.handled.clear()
+    chair._handle_sweep("marchhare-1", "#bobiverse", "!sweep")
+    assert any(h.startswith("sweep_denied_nick:") for h in chair.handled)
+    chair.stop()
+    rx.stop()
+    ircd.stop()

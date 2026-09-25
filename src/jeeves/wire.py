@@ -22,6 +22,7 @@ _NACK = re.compile(
 _BORED = re.compile(r"^!+\s*bored\b", re.I)
 _LIST = re.compile(r"^!list(?:\s+\S+)?\s*$", re.I)
 _HELP = re.compile(r"^!+\s*help(?:\s+\S+)?\s*$", re.I)
+_SWEEP = re.compile(r"^!+\s*sweep(?:\s+(#?\S+))?\s*$", re.I)
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,24 @@ def is_list(body: str) -> bool:
 
 def is_help(body: str) -> bool:
     return bool(_HELP.match((body or "").strip()))
+
+
+def parse_sweep(body: str) -> str | None:
+    """Return channel for ``!sweep [#chan]``, or None if not a sweep command.
+
+    Bare ``!sweep`` returns empty string (caller picks default channel).
+    """
+    m = _SWEEP.match((body or "").strip())
+    if not m:
+        return None
+    ch = m.group(1)
+    if not ch:
+        return ""
+    return ch if ch.startswith("#") else f"#{ch}"
+
+
+def is_sweep(body: str) -> bool:
+    return parse_sweep(body) is not None
 
 
 def parse_list_filters(body: str) -> tuple[str | None, str | None, bool]:

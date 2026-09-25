@@ -32,10 +32,12 @@ from .wire import (
     is_bored,
     is_help,
     is_list,
+    is_sweep,
     parse_ack,
     parse_done,
     parse_list_filters,
     parse_nack,
+    parse_sweep,
 )  # noqa: F401
 
 
@@ -193,6 +195,33 @@ class JeevesChair:
             self._pm(src, line)
         self.handled.append(f"help:{src}:{arg or '*'}:{len(result.lines)}")
 
+    def _handle_sweep(self, src: str, target: str, text: str) -> None:
+        """FR #52: !sweep [channel] — simon + account simon only; no channel text."""
+        ch = parse_sweep(text)
+        if ch is None:
+            return
+        if (src or "").strip().lower() != "simon":
+            self.handled.append(f"sweep_denied_nick:{src}")
+            return
+        if self.mode_grants is None:
+            self.handled.append("sweep_no_controller")
+            return
+        acct = (self.mode_grants.state.accounts.get("simon") or "").strip().lower()
+        if acct != "simon":
+            self.handled.append("sweep_denied_unauth")
+            self.mode_grants.state.events.append(f"sweep_denied_unauth:{src}")
+            return
+        if not ch:
+            ch = target if target.startswith("#") else "#bobiverse"
+        # Prefer NAMES-driven resweep; also grant known accounts immediately.
+        try:
+            self.client.send_raw(f"NAMES {ch}")
+        except Exception:
+            pass
+        known = list(self.mode_grants.state.accounts.keys())
+        granted = self.mode_grants.sweep_channel(ch, known)
+        self.handled.append(f"sweep:{ch}:{len(granted)}")
+
     def _handle_shop(self, src: str, target: str, text: str) -> None:
         # !help from channel or PM → reply by PM only (no channel flood)
         if is_help(text) or parse_help(text)[0]:
@@ -200,6 +229,9 @@ class JeevesChair:
             return
         if is_list(text):
             self._handle_list(src, text)
+            return
+        if is_sweep(text):
+            self._handle_sweep(src, target, text)
             return
         if not target.startswith("#"):
             if is_list(text):

@@ -32,6 +32,9 @@ _ACCOUNT_NOTIFY = re.compile(r"(?i)^:?(\S+)!\S+\s+ACCOUNT\s+(\S+)")
 _WHO_315 = re.compile(r"(?i)^\S+\s+315\b")  # end of WHO
 # 354 WHOX custom — simplified: nick account host flags
 _WHOX = re.compile(r"(?i)^\S+\s+354\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)")
+# 353 NAMES: :server 353 me = #chan :@nick1 %nick2 nick3
+_NAMES_353 = re.compile(r"(?i)^:?\S+\s+353\s+\S+\s+[*=@]\s+(\S+)\s+:?(.*)$")
+_NICK_PREFIX = re.compile(r"^[@%+~&]+")
 
 
 @dataclass(frozen=True)
@@ -152,6 +155,11 @@ def mode_line(channel: str, mode: str, nick: str) -> str:
     return f"MODE {ch} +{mode} {nick}"
 
 
+def strip_names_prefix(token: str) -> str:
+    """Strip @%+~& from a 353 NAMES token."""
+    return _NICK_PREFIX.sub("", (token or "").strip())
+
+
 @dataclass
 class ModeGrantState:
     # channel.lower() -> nick.lower() -> modes string
@@ -165,6 +173,8 @@ class ModeGrantState:
     events: list[str] = field(default_factory=list)
     mode_sent: list[str] = field(default_factory=list)
     last_mode_ts: float = 0.0
+    # channels awaiting NAMES sweep after Jeeves self-join / rejoin
+    pending_sweep: set[str] = field(default_factory=set)
 
 
 class ModeClient(Protocol):
@@ -295,24 +305,54 @@ class ModeGrantController:
         if host:
             self.set_host(nick, host)
         if (nick or "").lower() == self.jeeves_nick.lower():
-            # own join — sweep later via NAMES
+            # own join / rejoin — sweep when 353 NAMES arrives
+            ch = (channel or "").strip().lower()
+            if not ch.startswith("#"):
+                ch = "#" + ch
+            self.state.pending_sweep.add(ch)
             self.state.events.append(f"self_join:{channel}")
             return None
         return self.maybe_grant(nick, channel)
 
     def sweep_channel(self, channel: str, nicks: list[str]) -> list[str]:
-        """Re-grant for nicks already present (rejoin / NAMES)."""
+        """Re-grant for nicks already present (rejoin / NAMES / !sweep)."""
         granted: list[str] = []
         for n in nicks:
-            if (n or "").lower() == self.jeeves_nick.lower():
+            raw = strip_names_prefix(n)
+            if not raw:
                 continue
-            g = self.maybe_grant(n, channel)
+            if raw.lower() == self.jeeves_nick.lower():
+                continue
+            # seed modes from NAMES prefixes when present
+            pref = (n or "")[: len(n) - len(raw)] if n else ""
+            if pref:
+                modes = ""
+                if "@" in pref or "&" in pref or "~" in pref:
+                    modes += "o"
+                if "%" in pref:
+                    modes += "h"
+                if "+" in pref:
+                    modes += "v"
+                if modes:
+                    self.note_mode(channel, f"+{modes}", [raw])
+            g = self.maybe_grant(raw, channel)
             if g:
-                granted.append(f"{n}:+{g}")
+                granted.append(f"{raw}:+{g}")
+        return granted
+
+    def on_names(self, channel: str, names_blob: str) -> list[str]:
+        """Handle 353 NAMES — resweep after Jeeves join/rejoin."""
+        ch = (channel or "").strip().lower()
+        if not ch.startswith("#"):
+            ch = "#" + ch
+        tokens = [t for t in (names_blob or "").split() if t]
+        granted = self.sweep_channel(ch, tokens)
+        self.state.pending_sweep.discard(ch)
+        self.state.events.append(f"names_sweep:{ch}:{len(tokens)}")
         return granted
 
     def handle_raw(self, line: str) -> None:
-        """Parse JOIN / ACCOUNT / MODE from the wire."""
+        """Parse JOIN / ACCOUNT / MODE / 353 NAMES from the wire."""
         s = (line or "").strip()
         m = _ACCOUNT_NOTIFY.match(s)
         if m:
@@ -322,6 +362,13 @@ class ModeGrantController:
                 self.set_account(nick, None)
             else:
                 self.set_account(nick, acct)
+            # late account: try grant on channels we know
+            for ch in set(self.state.modes.keys()) | set(self.state.pending_sweep):
+                self.maybe_grant(nick, ch)
+            return
+        m = _NAMES_353.match(s)
+        if m:
+            self.on_names(m.group(1), m.group(2))
             return
         m = _JOIN.match(s)
         if m:
