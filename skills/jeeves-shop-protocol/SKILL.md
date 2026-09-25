@@ -1,4 +1,4 @@
-﻿---
+---
 name: jeeves-shop-protocol
 description: >
   Use this when wiring or checking the shop claim path in #{machine}: worker
@@ -11,7 +11,7 @@ description: >
 # jeeves-shop-protocol
 
 Wire contract for claims in each `#{machine}` shop. Jeeves owns the grammar and
-the ACK/DONE recording; the ear's `!bored` ÔåÆ offer code lives in agentic_irc.
+the ACK/DONE recording; the ear's `!bored` → offer code lives in agentic_irc.
 
 Agentic control is an overlay: the token-less path must never depend on this skill.
 
@@ -44,22 +44,22 @@ flowchart TD
 
 ## Grammar
 
-- Idle (worker ÔåÆ own shop): `!bored`
-- Offer (ear): `<nick>: OFFER <FR|MRB|UAT> <owner/repo>#<n> <url>` ÔÇö one open offer per worker.
+- Idle (worker → own shop): `!bored`
+- Offer (ear): `<nick>: OFFER <FR|MRB|UAT> <owner/repo>#<n> <url>` — one open offer per worker.
 - Accept: `ACK <TYPE> <owner/repo>#<n>`
 - Complete: `DONE <TYPE> <owner/repo>#<n> <PR|PASS merged|FAIL fix#m> <url>`
-- Return: `NACK|GIVEUP <TYPE> <owner/repo>#<n>` ÔåÆ back to unaccepted, worker idle.
+- Return: `NACK|GIVEUP <TYPE> <owner/repo>#<n>` → back to unaccepted, worker idle.
 
 ## What Jeeves records
 
 Jeeves trusts only `{machine}-<pid>` nicks, and only in **their own**
 `#{machine}`. Lines from `bob-*`, humans or other channels are ignored.
 
-- **ACK** ÔåÆ fire the digest webhook: job **accepted**, worker **busy**, activity
+- **ACK** → fire the digest webhook: job **accepted**, worker **busy**, activity
   `<MODE> <repo>#<n> <title>` (shown on the TipForm START tile).
-- **DONE** ÔåÆ job **completed**, activity cleared, worker **idle**, apply the
+- **DONE** → job **completed**, activity cleared, worker **idle**, apply the
   supersede rules (see `jeeves-queue`).
-- Worker QUIT / DONE timeout / GIVEUP ÔåÆ job back to unaccepted, worker idle.
+- Worker QUIT / DONE timeout / GIVEUP → job back to unaccepted, worker idle.
 
 ## Checks
 

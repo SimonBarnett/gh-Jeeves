@@ -18,8 +18,8 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 
 | Mode | Work | Ends with |
 |------|------|-----------|
-| **FR** | Earliest open issue/FR ÔåÆ open a PR that references it | `DONE FR owner/repo#n PR <url> (line starts with DONE; nothing after URL)` ÔÇö Jeeves turns the FR into an MRB |
-| **MRB** | Hostile review of a PR | `DONE MRB owner/repo#n PASS|FAIL <url> (line starts with DONE; nothing after URL)` or `FAIL fix#m` |
+| **FR** | Earliest open issue/FR → open a PR that references it | `DONE FR <repo>#n PR <url>` — Jeeves turns the FR into an MRB |
+| **MRB** | Hostile review of a PR | `DONE MRB <repo>#n PASS merged <url>` or `FAIL fix#m` |
 | **UAT** | After MRB PASS, a **separate** worker | Only Bob stamps UAT |
 
 Prefer a different worker for MRB than the PR author when 2+ are free; with one
