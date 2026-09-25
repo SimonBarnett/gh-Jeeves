@@ -40,6 +40,15 @@ class LocalIrcd:
         self._thread: threading.Thread | None = None
         self.privmsg_log: list[tuple[str, str, str]] = []  # nick, target, text
         self.on_privmsg: Callable[[str, str, str], None] | None = None
+        # FR #55: channels known to the server (for LIST), even with zero members
+        self._known_channels: set[str] = set()
+
+    def ensure_channel(self, channel: str) -> None:
+        """Create/advertise a channel name for LIST (tests create #b later)."""
+        ch = channel if channel.startswith("#") else f"#{channel}"
+        with self._lock:
+            self._known_channels.add(ch.lower())
+            self._chan_members.setdefault(ch.lower(), set())
 
     @property
     def bound_port(self) -> int:
@@ -121,11 +130,38 @@ class LocalIrcd:
                 ch_l = ch.lower()
                 c.channels.add(ch_l)
                 with self._lock:
+                    self._known_channels.add(ch_l)
                     self._chan_members[ch_l].add(c)
                 self._send(c, f":{c.nick}!u@local JOIN {ch}")
                 nicks = " ".join(m.nick for m in self._chan_members[ch_l] if m.nick)
                 self._send(c, f":local 353 {c.nick} = {ch} :{nicks}")
                 self._send(c, f":local 366 {c.nick} {ch} :End")
+            return
+        if cmd == "LIST" and c.registered:
+            with self._lock:
+                names = sorted(set(self._known_channels) | set(self._chan_members.keys()))
+                counts = {k: len(self._chan_members.get(k, set())) for k in names}
+            for ch_l in names:
+                ch = ch_l if ch_l.startswith("#") else f"#{ch_l}"
+                n = counts.get(ch_l, 0)
+                self._send(c, f":local 322 {c.nick} {ch} {n} :channel")
+            self._send(c, f":local 323 {c.nick} :End of LIST")
+            return
+        if cmd == "KICK" and len(bits) >= 3 and c.registered:
+            ch = bits[1] if bits[1].startswith("#") else f"#{bits[1]}"
+            victim = bits[2]
+            reason = line.split(":", 1)[1] if ":" in line else "kicked"
+            with self._lock:
+                members = list(self._chan_members.get(ch.lower(), set()))
+            kick_line = f":{c.nick}!u@local KICK {ch} {victim} :{reason}"
+            for m in members:
+                self._send(m, kick_line)
+            # remove victim from channel
+            with self._lock:
+                for m in list(self._chan_members.get(ch.lower(), set())):
+                    if m.nick.lower() == victim.lower():
+                        self._chan_members[ch.lower()].discard(m)
+                        m.channels.discard(ch.lower())
             return
         if cmd == "PRIVMSG" and len(bits) >= 3 and c.registered:
             target = bits[1]
@@ -213,12 +249,18 @@ class IrcClient:
         self.sock.settimeout(0.5)
         self.buf = ""
         self.inbox: list[tuple[str, str, str]] = []  # src, target, text
+        self.raw_inbox: list[str] = []  # all lines (FR #55 LIST/KICK)
+        self.on_raw: Callable[[str], None] | None = None
         self._send(f"NICK {nick}")
         self._send(f"USER {nick} 0 * :{nick}")
         self._drain_until(lambda: True, timeout=2.0)
 
     def _send(self, line: str) -> None:
         self.sock.sendall((line.rstrip("\r\n") + "\r\n").encode("utf-8"))
+
+    def send_raw(self, line: str) -> None:
+        """FR #55: LIST / raw protocol."""
+        self._send(line)
 
     def join(self, *channels: str) -> None:
         for ch in channels:
@@ -228,7 +270,16 @@ class IrcClient:
     def privmsg(self, target: str, text: str) -> None:
         self._send(f"PRIVMSG {target} :{text}")
 
+    def kick(self, channel: str, nick: str, reason: str = "out") -> None:
+        self._send(f"KICK {channel} {nick} :{reason}")
+
     def _parse(self, line: str) -> None:
+        self.raw_inbox.append(line)
+        if self.on_raw:
+            try:
+                self.on_raw(line)
+            except Exception:
+                pass
         if line.upper().startswith("PING"):
             token = line.split(":", 1)[1] if ":" in line else "x"
             self._send(f"PONG :{token}")

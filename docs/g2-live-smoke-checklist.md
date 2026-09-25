@@ -59,3 +59,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobJeeves.ps1 
 
 Record date, operator, service status, sample `!list` PM, and rollback notes in
 the release / FR #39 comment thread.
+
+## FR #55 auto-join (post-merge G2)
+
+- [ ] WHOIS Jeeves shows #bobiverse plus every current #{machine} shop
+- [ ] New shop channel appears in WHOIS within one LIST poll (~60s)
