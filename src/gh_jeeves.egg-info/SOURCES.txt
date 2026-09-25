@@ -1,0 +1,16 @@
+README.md
+pyproject.toml
+src/gh_jeeves.egg-info/PKG-INFO
+src/gh_jeeves.egg-info/SOURCES.txt
+src/gh_jeeves.egg-info/dependency_links.txt
+src/gh_jeeves.egg-info/requires.txt
+src/gh_jeeves.egg-info/top_level.txt
+src/jeeves/__init__.py
+src/jeeves/announce.py
+src/jeeves/guard.py
+src/jeeves/local_ircd.py
+src/jeeves/nicks.py
+src/jeeves/queue.py
+src/jeeves/receiver.py
+src/jeeves/roles.py
+src/jeeves/wire.py
