@@ -39,14 +39,48 @@ into this repo (those stay in agentic_build / agentic_irc). Point at the owner.
 
 ## How to report (strict order — no main pushes)
 
-1. Skill harvest / fix with write access → **branch + pull request** against
-   `SimonBarnett/gh-Jeeves`. Never `git push origin main` for harvest.
-2. If the PR cannot be opened → GitHub issue titled `harvest:` or `FR:` with
-   intended PR title, branch, file list, and body **in this turn**.
-3. Bugs / FRs without a ready patch → issue on this repo (labels `skill` /
-   `feature-request` as appropriate).
+1. **`gh` installed and authenticated** → branch + pull request against
+   `SimonBarnett/gh-Jeeves` (or `harvest:` / `FR:` issue). Never push `main`.
+2. **No `gh`, or not authenticated (default for outsiders)** → POST the Bob
+   intake webhook (FR #26). **Do not** ask anyone to create a GitHub account.
+3. **Offline** → write `harvest-outbox/<ts>.json` locally and retry next run.
 
-Prefer `gh` and repo scripts over free-form reasoning.
+### Intake fallback (no GitHub account)
+
+`POST https://irc.ntsa.uk/bob/v1/intake` (or lab stub) with JSON:
+
+```json
+{
+  "kind": "harvest",
+  "repo": "SimonBarnett/gh-Jeeves",
+  "title": "harvest: short title",
+  "body": "markdown",
+  "files": [{"path": "skills/foo/SKILL.md", "content": "..."}],
+  "source": {"machine": "HOST", "agent": "seat", "skill_book": "gh-Jeeves", "version": "0"},
+  "idempotency_key": "unique-per-submission"
+}
+```
+
+Optional header `X-Bob-Intake-Key: <fleet intake key>` (env/session only; never log).
+
+**curl**
+
+```bash
+curl -sS -X POST "$INTAKE_URL" -H "Content-Type: application/json" \
+  -H "X-Bob-Intake-Key: $BOB_INTAKE_KEY" --data-binary @payload.json
+```
+
+**PowerShell**
+
+```powershell
+Invoke-RestMethod -Method Post -Uri $env:INTAKE_URL -ContentType 'application/json' `
+  -Headers @{ 'X-Bob-Intake-Key' = $env:BOB_INTAKE_KEY } -Body (Get-Content payload.json -Raw)
+```
+
+Expect `202` with `{intake_id, url}` or `{intake_id, queued:true}`. Status:
+`GET /bob/v1/intake/<id>`.
+
+Code: `src/jeeves/intake.py`. Tests: `tests/test_intake_fr26.py`.
 
 ## Overlay rule
 
