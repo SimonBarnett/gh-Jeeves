@@ -28,11 +28,13 @@ class _FakeClient:
         pass
 
 
-def _drain_flush(chair: JeevesChair, *, expect_min: int = 0, timeout: float = 2.0) -> None:
-    """FR #74: drain enqueues on OutboundFloodQueue — start and wait for sends."""
+def _drain_flush(chair: JeevesChair, *, expect_min: int = 0, timeout: float = 3.0) -> None:
+    """FR #74 + #96: drain enqueues on OutboundFloodQueue — start and wait for sends."""
     import time
     chair._outbox.flood_s = 0.0
-    chair._outbox.start()
+    thr = getattr(chair._outbox, "_thread", None)
+    if thr is None or not thr.is_alive():
+        chair._outbox.start()
     chair._drain_outbox()
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -40,6 +42,10 @@ def _drain_flush(chair: JeevesChair, *, expect_min: int = 0, timeout: float = 2.
             break
         time.sleep(0.02)
     time.sleep(0.05)
+    try:
+        chair._outbox.stop()
+    except Exception:
+        pass
 
 
 def test_migrate_legacy_pos_file(tmp_path: Path):
