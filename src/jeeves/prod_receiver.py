@@ -45,7 +45,7 @@ def assert_homes_distinct(jeeves_home: Path, digest_home: Path) -> None:
 
 
 class ProdReceiver:
-    """Threading HTTP server for /bob/v1/git|report|intake|digest."""
+    """Threading HTTP server for /bob/v1/git|report|intake|digest (FR #47 drop-in)."""
 
     def __init__(
         self,
@@ -54,13 +54,19 @@ class ProdReceiver:
         host: str = "127.0.0.1",
         port: int = 0,
         intake_cfg: IntakeConfig | None = None,
+        bob_secret: str | None = None,
+        require_secret: bool | None = None,
     ):
         self.digest_home = Path(digest_home)
         self.digest_home.mkdir(parents=True, exist_ok=True)
-        self.state = DigestState(self.digest_home, intake_cfg=intake_cfg)
-        # Prefer real filer later; FakeGitHubFiler is replaced when GITHUB_TOKEN set
+        # Default ionos port remains 19781 when caller passes it; secret from env/file
+        self.state = DigestState(
+            self.digest_home,
+            intake_cfg=intake_cfg,
+            bob_secret=bob_secret,
+            require_secret=require_secret,
+        )
         if (os.environ.get("GITHUB_TOKEN") or "").strip():
-            # keep Fake for unit tests; production can inject later
             pass
         self.host = host
         self.port = int(port)
