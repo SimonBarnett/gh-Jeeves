@@ -1,80 +1,74 @@
 ---
 name: jeeves-install-service
 description: >
-  Install, repair, or upgrade BobJeeves and BobReport Windows services
-  idempotently. Never touch Ergo or BobIrcd. Use when Jeeves/receiver missing,
-  Disabled, ad-hoc BobReport-ionos task still owning the receiver, or
-  /jeeves-install-service.
+  Install, repair, or upgrade BobJeeves (chair+receiver) from config.
+  Never touch Ergo or BobIrcd. No BobIrcd service dependency. Use when
+  Jeeves missing, wrong IRC cmdline, or /jeeves-install-service.
 ---
 
 # jeeves-install-service
 
 ## Purpose
 
-Idempotent **plan / install / repair** of:
+Idempotent **plan / install / repair** of **BobJeeves**.
 
-| Service | Role | Script |
-|---------|------|--------|
-| **BobJeeves** | IRC chair | `tools/Install-BobJeeves.ps1` (FR #17) |
-| **BobReport** | GIT/digest HTTP receiver | `tools/Install-BobReport.ps1` (FR #9 / K8) |
+### Topology (FR #48) — one documented shape
 
-**K8:** the receiver is **owned in this repo**. Do not use the ad-hoc Administrator
-profile launcher `Start-BobReport-ionos.ps1` / task `BobReport-ionos` as source of
-truth — replace it with service **BobReport** after a dry-run plan.
+| Service | Role |
+|---------|------|
+| **BobJeeves** | **Combined**: `python -m jeeves all` = IRC chair **and** loopback receiver on **127.0.0.1:19781** |
 
-**CAST IRON:** never create/configure/start/stop **Ergo**, **BobIrcd**, or
-`ircd.yaml`.
+Optional legacy **BobReport** (`Install-BobReport.ps1`) is only for a split deployment; default ionos install is **combined** so IIS can keep proxying to 19781 without a second service.
 
-**Agentic control is an overlay.** Token-less G1 never depends on this skill.
+**No `depend= BobIrcd`.** Ergo may run as plain `ergo.exe`. Jeeves retries IRC with backoff if the network is down.
 
-## Homes
+**CAST IRON:** never create/configure/start/stop **Ergo**, **BobIrcd**, or `ircd.yaml`.
 
-| Path | Role |
-|------|------|
-| `%USERPROFILE%\.agentic-irc-jeeves` | Chair home |
-| `%USERPROFILE%\.agentic-irc-bobiverse` | Digest / queue / receiver (`BOB_DIGEST_HOME`) |
+## Config
+
+Copy `config/bobjeeves.example.json` → `config/bobjeeves.json` (or
+`%USERPROFILE%\.agentic-irc-jeeves\bobjeeves.json`) and fill:
+
+- `irc_host` / `irc_port` / `tls`
+- `nick`, `sasl_user`, `sasl_password_file` (path only — secret never in cmdline)
+- `receiver_port` (default **19781**)
+- `jeeves_home` / `digest_home` (must differ)
 
 ## Commands (CI-safe dry-run first)
 
 ```powershell
-# Chair
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobJeeves.ps1 -DryRun -Json
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\Start-BobJeeves.ps1 -DryRun
+# Production-shaped plan (prints service_cmdline with --host --port --tls)
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobJeeves.ps1 -DryRun -Json -Production
 
-# Receiver (K8) — default bind 127.0.0.1:19781
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobReport.ps1 -DryRun -Json
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\Start-BobReport.ps1 -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\Start-BobJeeves.ps1 -DryRun -Production
 
-# Entry point used by the service
-# python -m jeeves receiver --digest-home $env:USERPROFILE\.agentic-irc-bobiverse --receiver-bind 127.0.0.1 --receiver-port 19781
-
-# Chair on Ergo TLS (FR #46 native client — no agentic_irc irc_agent)
-# python -m jeeves chair --tls --host irc.ntsa.uk --port 6697
-# Optional: JEEVES_TLS_CAFILE, JEEVES_TLS_PIN_SHA256, AGENTIC_IRC_SASL_USER/PASSWORD
+# Apply (operators only, elevated) — never from FR workers
+# powershell -File tools\Install-BobJeeves.ps1 -Apply -Production -Json
 ```
 
 Exit codes: `0` ok, `2` validation errors.
 
-## Apply checklist (human / ionos operator only)
+## Apply checklist (human / ionos)
 
-1. `-DryRun -Json` for **both** installers; confirm `never_touch_ircd`.
-2. Elevated: `Install-BobReport.ps1 -Apply` then `Install-BobJeeves.ps1 -Apply` as needed.
-3. `Get-Service BobReport`, `Get-Service BobJeeves`.
-4. Disable tasks `BobReport-ionos` and `BobJeeves-chair` only after services healthy.
-5. IIS still proxies `https://irc.ntsa.uk/bob/v1/*` to loopback (operator).
+1. DryRun: confirm `service_cmdline` has host, port, `--tls`, receiver **19781**, `no_bobircd_dependency`.
+2. Elevated `-Apply -Production`.
+3. `Get-Service BobJeeves` — starting it must **not** start BobIrcd.
+4. Disable task `BobJeeves-chair` after healthy.
+5. IIS proxies `https://irc.ntsa.uk/bob/v1/*` → `127.0.0.1:19781`.
 
 ## Forbidden
 
-- Profile scripts under `Administrator` as the durable launcher
-- `Install-BobIrcd.ps1`, editing `ircd.yaml`, `sc.exe * BobIrcd`
+- `depend= BobIrcd`
+- `Install-BobIrcd.ps1`, editing `ircd.yaml`
+- Embedding SASL password in service AppParameters (file/env only)
 - FR worker `-Apply` on production
 
 ## Tests
 
 ```text
-pytest -q tests/test_skill_install_service_fr17.py tests/test_install_receiver_fr9.py
+pytest -q tests/test_install_fr48_cmdline.py tests/test_skill_install_service_fr17.py
 ```
 
 ## Related
 
-- FR #9 K8, FR #17, FR #39 `python -m jeeves`, agentic_irc #206
+- FR #48, #17, #39, #46, agentic_build #330
