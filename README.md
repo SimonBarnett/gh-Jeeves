@@ -53,7 +53,8 @@ flowchart LR
 8. `!list` in channel or PM → queue by PM only (`all`/`repo` filters; no silent cap).  
 9. Own Windows service; never touch Ergo/BobIrcd.  
 10. Busy/idle from ACK/DONE, not from TUI appearance.  
-11. `!ignore` / `!unignore` / `!ignored` (FR #75): suppress a repo from the whole Jeeves process (no announce, queue, `!list`, or ear offers). List persists in `ignored.json` beside `queue.json`. Simon (account) or `bob-*` ops mutate; `!ignored` is open.
+11. `!ignore` / `!unignore` / `!ignored` (FR #75): suppress a repo from the whole Jeeves process (no announce, queue, `!list`, or ear offers). List persists in `ignored.json` beside `queue.json`. Simon (account) or `bob-*` ops mutate; `!ignored` is open.  
+12. `!focus` / `!unfocus` (FR #68): simon (services account) sets repo priority for `!list` and ear `!bored` (same sort). `high`/`medium`/`low` = 1/5/9; bare `!focus {repo}` = high. Persists `focus.json`; digest exposes `focus` additively.
 
 Details: `docs/functional-spec.md`, `docs/vision.md`.
 

@@ -454,6 +454,13 @@ def public_digest_snapshot(home: Path, *, queue_home: Path | None = None) -> dic
         doc["workers"] = dict(q.get("workers") or {})
     except Exception:
         pass
+    # FR #68: additive focus list (trays may ignore unknown keys)
+    try:
+        from .focus import focus_public_list
+
+        doc["focus"] = focus_public_list(qh)
+    except Exception:
+        doc.setdefault("focus", [])
     # version stamp optional
     stamp = Path(home) / "jeeves_version.json"
     if stamp.is_file():

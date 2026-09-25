@@ -392,13 +392,20 @@ def unaccepted_tasks(home: Path) -> list[dict]:
     return list(load_queue(home).get("unaccepted") or [])
 
 
-def top_unaccepted(home: Path) -> dict | None:
-    """Top unaccepted job for ear !bored offers. Skips ignored repos (FR #75 / !focus)."""
+def ordered_unaccepted(home: Path) -> list[dict]:
+    """Unaccepted rows: ignore filter + FR #68 focus sort (same as !list / !bored)."""
+    from .focus import sort_unaccepted_rows
     from .ignore import filter_rows_not_ignored
 
     doc = load_queue(home)
-    rows = sorted(doc.get("unaccepted") or [], key=lambda r: int(r.get("seq") or 0))
+    rows = list(doc.get("unaccepted") or [])
     rows = filter_rows_not_ignored(home, rows)
+    return sort_unaccepted_rows(home, rows)
+
+
+def top_unaccepted(home: Path) -> dict | None:
+    """Top unaccepted job for ear !bored offers. Skips ignored; focus-first (#68)."""
+    rows = ordered_unaccepted(home)
     return rows[0] if rows else None
 
 
