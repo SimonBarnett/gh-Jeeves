@@ -1,73 +1,76 @@
 ---
 name: jeeves-install-service
 description: >
-  Install, repair, or upgrade the BobJeeves Windows service idempotently.
-  Never touch Ergo or BobIrcd. Use when Jeeves service missing, Disabled,
-  scheduled task BobJeeves-chair still owning the chair, or /jeeves-install-service.
+  Install, repair, or upgrade BobJeeves and BobReport Windows services
+  idempotently. Never touch Ergo or BobIrcd. Use when Jeeves/receiver missing,
+  Disabled, ad-hoc BobReport-ionos task still owning the receiver, or
+  /jeeves-install-service.
 ---
 
 # jeeves-install-service
 
 ## Purpose
 
-Idempotent **plan / install / repair / upgrade** of Windows service **`BobJeeves`**
-from a gh-Jeeves tree (agentic_build #330, FR #17). Replaces the scheduled task
-`BobJeeves-chair` once the service is healthy.
+Idempotent **plan / install / repair** of:
 
-**CAST IRON:** never create, configure, start, stop, or edit **Ergo**, **BobIrcd**,
-or `ircd.yaml`. Dependency on BobIrcd is declare-only (`depend=`).
+| Service | Role | Script |
+|---------|------|--------|
+| **BobJeeves** | IRC chair | `tools/Install-BobJeeves.ps1` (FR #17) |
+| **BobReport** | GIT/digest HTTP receiver | `tools/Install-BobReport.ps1` (FR #9 / K8) |
 
-**Agentic control is an overlay.** The token-less path (brief §0 / FR #1) must
-**never** depend on this skill or an LLM. G1 stays script-only.
+**K8:** the receiver is **owned in this repo**. Do not use the ad-hoc Administrator
+profile launcher `Start-BobReport-ionos.ps1` / task `BobReport-ionos` as source of
+truth — replace it with service **BobReport** after a dry-run plan.
 
-## Homes (must differ)
+**CAST IRON:** never create/configure/start/stop **Ergo**, **BobIrcd**, or
+`ircd.yaml`.
+
+**Agentic control is an overlay.** Token-less G1 never depends on this skill.
+
+## Homes
 
 | Path | Role |
 |------|------|
-| `%USERPROFILE%\.agentic-irc-jeeves` | Chair IRC home (`JeevesHome`) |
-| `%USERPROFILE%\.agentic-irc-bobiverse` | Digest / queue / chair-outbox (`BOB_DIGEST_HOME`) |
-
-If they are the same path, the installer fails the plan.
+| `%USERPROFILE%\.agentic-irc-jeeves` | Chair home |
+| `%USERPROFILE%\.agentic-irc-bobiverse` | Digest / queue / receiver (`BOB_DIGEST_HOME`) |
 
 ## Commands (CI-safe dry-run first)
 
-From the gh-Jeeves repo root:
-
 ```powershell
-# Plan only (default) — no SCM mutation; safe on any box / in tests
+# Chair
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobJeeves.ps1 -DryRun -Json
-
-# Start-helper dry-run
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\Start-BobJeeves.ps1 -DryRun
 
-# Apply (operators only, elevated). NEVER run from FR workers or G1.
-# powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobJeeves.ps1 -Apply
+# Receiver (K8) — default bind 127.0.0.1:19781
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobReport.ps1 -DryRun -Json
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\Start-BobReport.ps1 -DryRun
+
+# Entry point used by the service
+# python -m jeeves receiver --digest-home $env:USERPROFILE\.agentic-irc-bobiverse --receiver-bind 127.0.0.1 --receiver-port 19781
 ```
 
-Exit codes: `0` plan/apply ok, `2` validation errors.
+Exit codes: `0` ok, `2` validation errors.
 
-## Apply checklist (human / ionos operator)
+## Apply checklist (human / ionos operator only)
 
-1. Run `-DryRun -Json` and confirm `never_touch_ircd`, `homes_distinct`, steps.
-2. Confirm BobIrcd already exists (do **not** install it from this skill).
-3. Elevated PowerShell: `-Apply`.
-4. `Get-Service BobJeeves` → Running or start it.
-5. Disable task `BobJeeves-chair` only after the service is healthy.
-6. Verify with skill `jeeves-health` (separate FR).
+1. `-DryRun -Json` for **both** installers; confirm `never_touch_ircd`.
+2. Elevated: `Install-BobReport.ps1 -Apply` then `Install-BobJeeves.ps1 -Apply` as needed.
+3. `Get-Service BobReport`, `Get-Service BobJeeves`.
+4. Disable tasks `BobReport-ionos` and `BobJeeves-chair` only after services healthy.
+5. IIS still proxies `https://irc.ntsa.uk/bob/v1/*` to loopback (operator).
 
 ## Forbidden
 
+- Profile scripts under `Administrator` as the durable launcher
 - `Install-BobIrcd.ps1`, editing `ircd.yaml`, `sc.exe * BobIrcd`
-- Installing NSSM/Ergo from this skill (read existing `nssm.exe` path only)
-- Putting secrets in the skill, plan JSON committed to git, or chat
+- FR worker `-Apply` on production
 
 ## Tests
 
 ```text
-pytest -q tests/test_skill_install_service_fr17.py
+pytest -q tests/test_skill_install_service_fr17.py tests/test_install_receiver_fr9.py
 ```
 
 ## Related
 
-- agentic_build #330, agentic_irc chair install scripts
-- Skills: `jeeves-health`, `jeeves-release`, `jeeves-token-less-gate`
+- FR #9 K8, FR #17, FR #39 `python -m jeeves`, agentic_irc #206
