@@ -99,6 +99,11 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Disable GitHub resync (same as JEEVES_RESYNC_DISABLE=1)",
     )
+    p.add_argument(
+        "--replay-outbox",
+        action="store_true",
+        help="FR #71: drain chair-outbox from offset 0 when no pos file (default: start at EOF, no flood)",
+    )
     return p.parse_args(argv)
 
 
@@ -314,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
                 nick=args.nick,
                 shops=shops,
                 resync_scheduler=sched,
+                replay_outbox=bool(getattr(args, "replay_outbox", False)),
             )
             # optional client= only if JeevesChair supports it
             import inspect
