@@ -163,8 +163,18 @@ def make_handler(state: DigestState):
                 event = self.headers.get("X-GitHub-Event") or ""
                 payload = self._read_json()
                 with state.lock:
-                    line, claim, reject = process_git_webhook(event, payload)
+                    line, claim, reject = process_git_webhook(
+                        event, payload, home=state.home
+                    )
                     if reject:
+                        # FR #75: ignored repos are a quiet no-op (204), not a client error.
+                        if reject == "ignored_repo":
+                            state.events.append(
+                                {"event": event, "tag": "ignored_repo"}
+                            )
+                            self.send_response(204)
+                            self.end_headers()
+                            return
                         self.send_response(400)
                         self.end_headers()
                         self.wfile.write(reject.encode("utf-8"))

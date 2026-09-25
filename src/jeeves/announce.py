@@ -125,14 +125,29 @@ def format_github_webhook_announce(event: str, payload: dict) -> str | None:
     return line
 
 
-def process_git_webhook(event: str, payload: dict) -> tuple[str | None, Claim | None, str | None]:
+def process_git_webhook(
+    event: str,
+    payload: dict,
+    *,
+    home: Any | None = None,
+) -> tuple[str | None, Claim | None, str | None]:
     """
     Returns (announce_line, claim, reject_reason).
     reject_reason set → do not announce or enqueue.
+    When home is set, ignored repos (FR #75) return reject_reason ignored_repo
+    with no announce and no claim.
     """
     hit = payload_secret_rejected(payload)
     if hit:
         return None, None, f"secret_field:{hit}"
+    if home is not None:
+        from pathlib import Path
+
+        from .ignore import is_ignored, repo_from_payload
+
+        repo = repo_from_payload(payload if isinstance(payload, dict) else {})
+        if repo and is_ignored(Path(home), repo):
+            return None, None, "ignored_repo"
     line = format_github_webhook_announce(event, payload)
     claim = claim_from_payload(event, payload)
     return line, claim, None

@@ -24,6 +24,9 @@ _BORED = re.compile(r"^!+\s*bored\b", re.I)
 _LIST = re.compile(r"^!+\s*list(?:\s+.*)?\s*$", re.I)
 _HELP = re.compile(r"^!+\s*help(?:\s+\S+)?\s*$", re.I)
 _SWEEP = re.compile(r"^!+\s*sweep(?:\s+(#?\S+))?\s*$", re.I)
+_IGNORE = re.compile(r"^!+\s*ignore(?:\s+\S+)?\s*$", re.I)
+_UNIGNORE = re.compile(r"^!+\s*unignore(?:\s+\S+)?\s*$", re.I)
+_IGNORED = re.compile(r"^!+\s*ignored\s*$", re.I)
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,18 @@ def parse_sweep(body: str) -> str | None:
 
 def is_sweep(body: str) -> bool:
     return parse_sweep(body) is not None
+
+
+def is_ignore(body: str) -> bool:
+    return bool(_IGNORE.match((body or "").strip()))
+
+
+def is_unignore(body: str) -> bool:
+    return bool(_UNIGNORE.match((body or "").strip()))
+
+
+def is_ignored_list(body: str) -> bool:
+    return bool(_IGNORED.match((body or "").strip()))
 
 
 def parse_list_filters(body: str) -> tuple[str | None, str | None, bool]:
