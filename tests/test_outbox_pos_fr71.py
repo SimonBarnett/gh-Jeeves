@@ -179,14 +179,12 @@ def test_whitespace_and_garbage_pos_park_eof(tmp_path: Path):
     assert resolve_outbox_start(home, outbox_size=len(body)) == len(body)
 
 
-def test_negative_pos_clamps_to_zero_then_eof_if_needed(tmp_path: Path):
+def test_negative_pos_parks_eof_no_replay(tmp_path: Path):
     home = tmp_path
     (home / "chair-outbox.txt").write_bytes(b"abc")
-    write_pos(home, -12)
-    # written as max(0, -12)=0 via write_pos; resolve keeps 0 for non-empty
-    # (explicit operator write). Negative only from corrupt raw file:
     (home / POS_NAME).write_text("-5", encoding="utf-8")
-    assert resolve_outbox_start(home, outbox_size=3) == 0
+    assert resolve_outbox_start(home, outbox_size=3, replay=False) == 3
+    assert (home / POS_NAME).read_text(encoding="utf-8").strip() == "3"
 
 
 def test_empty_home_seeds_zero_no_outbox_file(tmp_path: Path):
