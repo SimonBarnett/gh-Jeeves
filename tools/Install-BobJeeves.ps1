@@ -163,6 +163,11 @@ $plan = [ordered]@{
     existing_service     = $null
     existing_status      = $null
     task_BobJeeves_chair = $null
+    # FR #7 / K6: service replaces scheduled task BobJeeves-chair
+    start_type           = 'auto'
+    disable_task         = $true
+    disable_task_name    = 'BobJeeves-chair'
+    recovery_restart     = $true
     service_cmdline      = $serviceCmdline
     python_args          = @($pyArgs)
     steps                = New-Object System.Collections.ArrayList
@@ -237,12 +242,14 @@ if ($svc) {
 [void]$plan.steps.Add("service cmdline: $($plan.service_cmdline)")
 [void]$plan.steps.Add("BOB_DIGEST_HOME=$DigestHome JEEVES_HOME=$JeevesHome")
 [void]$plan.steps.Add('IRC connect retries with backoff if Ergo down (no BobIrcd start)')
-[void]$plan.steps.Add('Disable scheduled task BobJeeves-chair after service healthy (Apply only)')
+[void]$plan.steps.Add('start= auto (never Disabled) - FR #7 / K6')
+[void]$plan.steps.Add('sc.exe failure BobJeeves reset= 86400 actions= restart/60000/restart/60000/restart/60000')
+[void]$plan.steps.Add('Disable-ScheduledTask BobJeeves-chair after service registered (Apply only)')
 
 $task = Get-ScheduledTask -TaskName 'BobJeeves-chair' -ErrorAction SilentlyContinue
 if ($task) {
     $plan.task_BobJeeves_chair = [string]$task.State
-    [void]$plan.warnings.Add('Scheduled task BobJeeves-chair still present')
+    [void]$plan.warnings.Add('Scheduled task BobJeeves-chair still present; Apply will Disable-ScheduledTask')
 } else {
     $plan.task_BobJeeves_chair = 'absent'
 }
@@ -297,6 +304,11 @@ if ($Apply) {
             }
             if ($plan.ok) {
                 & sc.exe description $ServiceName 'gh-Jeeves chair+receiver (python -m jeeves all). No BobIrcd dependency. Never manages Ergo.' | Out-Null
+                # FR #7 / K6: always Automatic (re-enable if previously Disabled)
+                & sc.exe config $ServiceName start= auto | Out-Null
+                # Restart on failure: 3x with 60s delay, reset period 1 day
+                & sc.exe failure $ServiceName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
+                & sc.exe failureflag $ServiceName 1 | Out-Null
                 $appParams = ($pyArgs -join ' ')
                 & $plan.nssm set $ServiceName Application $plan.python | Out-Null
                 & $plan.nssm set $ServiceName AppDirectory $RepoRoot | Out-Null
@@ -312,7 +324,20 @@ if ($Apply) {
                 if ($SaslPasswordFile) { $envExtra += "AGENTIC_IRC_SASL_PASSWORD_FILE=$SaslPasswordFile" }
                 if ($PasswordFile) { $envExtra += "AGENTIC_IRC_PASSWORD_FILE=$PasswordFile" }
                 & $plan.nssm set $ServiceName AppEnvironmentExtra $envExtra | Out-Null
-                [void]$plan.steps.Add('Apply completed (nssm -> full jeeves all cmdline; no BobIrcd depend)')
+                # FR #7 / K6: disable legacy scheduled task so service owns the chair
+                $legacyTask = Get-ScheduledTask -TaskName 'BobJeeves-chair' -ErrorAction SilentlyContinue
+                if ($legacyTask) {
+                    try {
+                        Disable-ScheduledTask -TaskName 'BobJeeves-chair' -ErrorAction Stop | Out-Null
+                        $plan.task_BobJeeves_chair = 'Disabled'
+                        [void]$plan.steps.Add('Disabled scheduled task BobJeeves-chair')
+                    } catch {
+                        [void]$plan.warnings.Add(('Disable-ScheduledTask BobJeeves-chair failed: {0}' -f $_.Exception.Message))
+                    }
+                } else {
+                    $plan.task_BobJeeves_chair = 'absent'
+                }
+                [void]$plan.steps.Add('Apply completed (nssm -> full jeeves all cmdline; start= auto; recovery restart; no BobIrcd depend)')
             }
         }
     }

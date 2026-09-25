@@ -50,12 +50,13 @@ Exit codes: `0` ok, `2` validation errors.
 
 ## Apply checklist (human / ionos)
 
-1. DryRun: confirm `service_cmdline` has host, port, `--tls`, receiver **19781**, `no_bobircd_dependency`.
+1. DryRun: confirm `service_cmdline` has host, port, `--tls`, receiver **19781**, `no_bobircd_dependency`, **`start_type=auto`**, **`disable_task=true`** (BobJeeves-chair), **`recovery_restart=true`**.
 2. Elevated `-Apply -Production`.
-3. `Get-Service BobJeeves` — starting it must **not** start BobIrcd.
-4. Disable task `BobJeeves-chair` after healthy.
-5. IIS proxies `https://irc.ntsa.uk/bob/v1/*` → `127.0.0.1:19781`.
-6. **Outbox pos (FR #71 / cutover):** digest home may still have agentic_irc `chair-outbox.txt.pos`. gh-Jeeves writes `chair-outbox.pos`. First start **migrates** the legacy file; if neither exists and the outbox is non-empty, start is **EOF** (no replay flood to `#bobiverse`). Empty / whitespace / garbage / negative pos files are treated as missing (EOF park) — never as `0`. Do not pass `--replay-outbox` on production cutover unless operators intentionally want a full re-announce. See `docs/receiver-bobcallback-cutover.md`.
+3. `Get-Service BobJeeves` — **StartType Automatic** (never Disabled); starting it must **not** start BobIrcd.
+4. Apply **Disable-ScheduledTask BobJeeves-chair** itself (FR #7 / K6) — do not leave Jeeves on the legacy task.
+5. Failure recovery: `sc failure` restart/60s ×3 (Apply sets this).
+6. IIS proxies `https://irc.ntsa.uk/bob/v1/*` → `127.0.0.1:19781`.
+7. **Outbox pos (FR #71 / cutover):** digest home may still have agentic_irc `chair-outbox.txt.pos`. gh-Jeeves writes `chair-outbox.pos`. First start **migrates** the legacy file; if neither exists and the outbox is non-empty, start is **EOF** (no replay flood to `#bobiverse`). Empty / whitespace / garbage / negative pos files are treated as missing (EOF park) — never as `0`. Do not pass `--replay-outbox` on production cutover unless operators intentionally want a full re-announce. See `docs/receiver-bobcallback-cutover.md`.
 
 ## Forbidden
 
@@ -67,9 +68,9 @@ Exit codes: `0` ok, `2` validation errors.
 ## Tests
 
 ```text
-pytest -q tests/test_install_fr48_cmdline.py tests/test_skill_install_service_fr17.py tests/test_outbox_pos_fr71.py
+pytest -q tests/test_install_fr48_cmdline.py tests/test_skill_install_service_fr17.py tests/test_outbox_pos_fr71.py tests/test_k6_service_replaces_task_fr7.py
 ```
 
 ## Related
 
-- FR #48, #17, #39, #46, #71, agentic_build #330
+- FR #7 (K6 service replaces task), #48, #17, #39, #46, #71, agentic_build #330
