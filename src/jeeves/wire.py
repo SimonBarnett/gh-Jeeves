@@ -20,7 +20,8 @@ _NACK = re.compile(
 )
 # !bored / !BORED / optional trailing junk stripped — ear owns this command.
 _BORED = re.compile(r"^!+\s*bored\b", re.I)
-_LIST = re.compile(r"^!list(?:\s+\S+)?\s*$", re.I)
+# !list with zero or more args (all, repo, fr, …) — FR #50
+_LIST = re.compile(r"^!+\s*list(?:\s+.*)?\s*$", re.I)
 _HELP = re.compile(r"^!+\s*help(?:\s+\S+)?\s*$", re.I)
 
 

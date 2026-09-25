@@ -44,7 +44,7 @@ flowchart LR
 5. Deterministic scripts-only path (works during token outage).  
 6. Supersede: FR↔MRB↔UAT per GitHub events (see diagrams).  
 7. MRB PASS closes FR; FAIL one fix PR, FR stays open; only Bob stamps UAT.  
-8. `!list` by PM.  
+8. `!list` in channel or PM → queue by PM only (`all`/`repo` filters; no silent cap).  
 9. Own Windows service; never touch Ergo/BobIrcd.  
 10. Busy/idle from ACK/DONE, not from TUI appearance.
 

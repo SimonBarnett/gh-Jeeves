@@ -1,18 +1,20 @@
-"""!list / !help PM lines (FR #39 / agentic_irc #208). Channel stays silent."""
+"""!list / !help PM lines (FR #50 / agentic_irc #208). Channel stays silent."""
+
 from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any
 
 from .queue import load_queue
 
-LIST_MAX_LINES = 10
+# Soft page size when not listing all; never silent — always emit +M more when truncated.
+LIST_PAGE_DEFAULT = 30
 LIST_LINE_MAX = 400
 LIST_RATE_S = 30.0
+FLOOD_S = 0.8
 
 _HELP_LINES = (
-    "Jeeves: !list [fr|mrb|uat|all] — queue by PM (type in channel; answer is PM)",
+    "Jeeves: !list [all|<repo>|fr|mrb|uat] — queue by PM (type in channel; answer is PM)",
     "Jeeves: !help — this help by PM",
     "Workers: ACK/DONE/NACK in #{machine}; ears own !bored/OFFER",
     "Busy/idle lives on digest webhook only (not IRC status talk)",
@@ -43,49 +45,52 @@ def reset_list_rate() -> None:
     _list_last.clear()
 
 
-def _age(row: dict, now: float | None = None) -> str:
-    t = float(now if now is not None else time.time())
-    ts = str(row.get("ts") or row.get("created_at") or "")
-    if not ts:
+def _norm_id(ident: str) -> str:
+    s = str(ident or "").strip()
+    if not s:
         return "?"
-    try:
-        # accept epoch ms or ISO-ish
-        if ts.isdigit():
-            sec = t - (int(ts) / 1000.0 if len(ts) > 11 else int(ts))
-        else:
-            # rough: treat as missing
-            return "?"
-        sec = max(0, int(sec))
-    except (TypeError, ValueError):
-        return "?"
-    if sec < 60:
-        return f"{sec}s"
-    if sec < 3600:
-        return f"{sec // 60}m"
-    if sec < 86400:
-        return f"{sec // 3600}h"
-    return f"{sec // 86400}d"
+    return s if s.startswith("#") else f"#{s}"
 
 
-def format_list_line(index: int, row: dict, *, line_max: int = LIST_LINE_MAX, now: float | None = None) -> str:
-    task = str(row.get("task") or "?")
-    repo = str(row.get("repo") or "?")
-    ident = str(row.get("id") or "?")
-    age = _age(row, now=now)
+def _clip_utf8(s: str, max_b: int) -> str:
+    if max_b < 1:
+        return ""
+    raw = s or ""
+    if len(raw.encode("utf-8")) <= max_b:
+        return raw
+    # leave room for ellipsis
+    out = raw
+    while out and len(out.encode("utf-8")) > max_b - 1:
+        out = out[:-1]
+    return out + "…" if out != raw else out
+
+
+def format_list_line(
+    row: dict,
+    *,
+    line_max: int = LIST_LINE_MAX,
+    index: int | None = None,
+) -> str:
+    """
+    Wire format (FR #50): ``<MODE> <owner/repo>#<n> <title>``
+    MODE is FR|MRB|UAT (task). Optional leading ``N.`` for multi-line lists.
+    """
+    task = str(row.get("task") or "?").upper()
+    repo = str(row.get("repo") or "?").strip()
+    ident = _norm_id(str(row.get("id") or ""))
+    # ensure single # between repo and n
+    num = ident.lstrip("#")
+    ref = f"{repo}#{num}"
     title = str(row.get("line") or row.get("title") or "").replace("\n", " ").strip()
-    head = f"#{index} {task} {repo}{ident} {age}"
-    budget = max(8, int(line_max) - len(head.encode("utf-8")) - 1)
+    prefix = f"{index}. " if index is not None else ""
+    head = f"{prefix}{task} {ref}"
+    budget = max(8, int(line_max) - len(head.encode("utf-8")) - (1 if title else 0))
     if title:
-        while title and len(title.encode("utf-8")) > budget - 1:
-            title = title[:-1]
-        if title and len(str(row.get("line") or "").encode("utf-8")) > budget:
-            title = title + "…"
+        title = _clip_utf8(title, budget)
         line = f"{head} {title}"
     else:
         line = head
-    while len(line.encode("utf-8")) > line_max and len(line) > 1:
-        line = line[:-2] + "…"
-    return line
+    return _clip_utf8(line, line_max)
 
 
 def format_unaccepted_list(
@@ -94,34 +99,67 @@ def format_unaccepted_list(
     task_filter: str | None = None,
     repo_filter: str | None = None,
     list_all: bool = False,
-    max_lines: int = LIST_MAX_LINES,
+    max_lines: int | None = None,
     line_max: int = LIST_LINE_MAX,
     now: float | None = None,
 ) -> list[str]:
+    """
+    Build PM lines for !list.
+
+    - Default: unaccepted only, up to LIST_PAGE_DEFAULT, then explicit ``+M more``.
+    - ``list_all``: unaccepted + accepted (busy), all rows paced by caller (no silent cap).
+    - Never truncates without a trailing more-hint when jobs remain.
+    """
+    del now  # reserved for age display if re-added
     doc = load_queue(home)
-    rows = list(doc.get("unaccepted") or [])
-    rows.sort(key=lambda r: int(r.get("seq") or 0))
+    unacc = list(doc.get("unaccepted") or [])
+    acc = list(doc.get("accepted") or [])
+    unacc.sort(key=lambda r: int(r.get("seq") or 0))
+    acc.sort(key=lambda r: int(r.get("seq") or 0))
+
+    if list_all:
+        # mark accepted for clarity in title if missing
+        rows: list[dict] = []
+        for r in unacc:
+            rows.append(dict(r))
+        for r in acc:
+            row = dict(r)
+            if not str(row.get("line") or "").startswith("[accepted]"):
+                row["line"] = f"[accepted] {row.get('line') or row.get('title') or ''}".strip()
+            rows.append(row)
+    else:
+        rows = unacc
+
     if task_filter:
         tf = task_filter.upper()
         rows = [r for r in rows if str(r.get("task") or "").upper() == tf]
     if repo_filter:
-        rf = repo_filter.lower()
+        rf = repo_filter.lower().strip()
         rows = [r for r in rows if rf in str(r.get("repo") or "").lower()]
+
     if not rows:
         return ["queue empty"]
+
     total = len(rows)
-    cap = max(1, int(max_lines))
     if list_all:
-        cap = max(cap, total)
+        cap = total  # no silent cap — send all (caller paces)
+    else:
+        cap = max(1, int(max_lines if max_lines is not None else LIST_PAGE_DEFAULT))
+        cap = min(cap, total)
+
     show = rows[:cap]
     out: list[str] = []
-    if total > 1 or total > len(show):
-        out.append(f"{total} unaccepted (showing {len(show)})")
+    if total > 1 or (not list_all and total > len(show)):
+        kind = "jobs" if list_all else "unaccepted"
+        out.append(f"{total} {kind} (showing {len(show)})")
     for i, row in enumerate(show, start=1):
-        out.append(format_list_line(i, row, line_max=line_max, now=now))
+        out.append(format_list_line(row, line_max=line_max, index=i if total > 1 else None))
     more = total - len(show)
     if more > 0:
-        out.append(f"+{more} more; !list all")
+        hint = "!list all" if not list_all else "!list <repo> to filter"
+        if repo_filter:
+            hint = f"!list all {repo_filter}" if not list_all else hint
+        out.append(f"... and {more} more; {hint}")
     return out
 
 
