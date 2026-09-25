@@ -5,10 +5,12 @@ or restart live services unless Bob assigns it.
 
 ## Pre
 
+- [ ] **`!list` full on start** — count close to open issues and PRs (FR #49 resync-on-start)
 - [ ] `gh-Jeeves` main contains `python -m jeeves` and this checklist
 - [ ] Backup `~/.agentic-irc-bobiverse/queue.json` and `chair-outbox.txt`
 - [ ] Backup `~/.agentic-irc-jeeves/` if present
 - [ ] Confirm Ergo/BobIrcd stay untouched (no `ircd.yaml` edits)
+- [ ] `GITHUB_TOKEN` / `JEEVES_GITHUB_TOKEN` (or token file) present for resync; never logged
 
 ## Install / upgrade (idempotent)
 
