@@ -1,4 +1,4 @@
-﻿name: G1 token-less gate
+﻿name: Full test suite
 
 on:
   push:
@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  g1:
-    runs-on: ubuntu-latest
+  tests:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,8 +15,7 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: pip install -e ".[dev]"
-      - name: G1 pytest
-        run: python -m pytest -q tests/g1_token_less_e2e
+      - name: Full pytest (tests/)
+        run: python -m pytest tests/ -q
         env:
           PYTHONPATH: src
-

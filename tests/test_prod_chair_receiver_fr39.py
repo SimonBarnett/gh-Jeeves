@@ -172,7 +172,19 @@ def test_install_ps1_dry_run_json():
     data = json.loads(proc.stdout)
     assert data["never_touch_ircd"] is True
     assert data["service_name"] == "BobJeeves"
-    assert data.get("python_module") == "jeeves" or "jeeves" in str(data.get("chair_entry") or "")
+    # FR #48 / #96: DryRun exposes combined topology via service_cmdline + python_args
+    assert data.get("topology") == "combined"
+    assert data.get("no_bobircd_dependency") is True
+    assert data.get("receiver_port") == 19781
+    cmdline = str(data.get("service_cmdline") or "")
+    assert "-m jeeves" in cmdline
+    assert " all " in cmdline or cmdline.rstrip().endswith(" all")
+    args = list(data.get("python_args") or [])
+    assert "-m" in args and "jeeves" in args and "all" in args
+    assert "--tls" in args
+    assert "--receiver-port" in args
+    i = args.index("--receiver-port")
+    assert str(args[i + 1]) == "19781"
 
 
 def test_g2_checklist_exists():
