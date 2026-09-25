@@ -20,6 +20,8 @@ class Client:
     registered: bool = False
     channels: set[str] = field(default_factory=set)
     buf: str = ""
+    account: str = ""  # FR #52 services account (test/SASL stand-in)
+    host: str = "local"
 
     def __hash__(self) -> int:
         return hash(id(self.sock))
@@ -40,6 +42,9 @@ class LocalIrcd:
         self._thread: threading.Thread | None = None
         self.privmsg_log: list[tuple[str, str, str]] = []  # nick, target, text
         self.on_privmsg: Callable[[str, str, str], None] | None = None
+        # FR #52: channel -> nick -> mode chars
+        self._chan_modes: dict[str, dict[str, str]] = defaultdict(dict)
+        self.mode_log: list[str] = []
 
     @property
     def bound_port(self) -> int:
@@ -115,6 +120,20 @@ class LocalIrcd:
             token = bits[1] if len(bits) > 1 else "local"
             self._send(c, f"PONG :{token.lstrip(':')}")
             return
+        if cmd == "ACCOUNT" and len(bits) >= 2 and c.registered:
+            # test helper: ACCOUNT <name>  — sets services account for this client
+            c.account = bits[1].lstrip(":")
+            # notify channel peers (account-notify style)
+            notice = f":{c.nick}!u@{c.host} ACCOUNT {c.account}"
+            with self._lock:
+                peers = list(self._clients)
+            for p in peers:
+                if p is not c:
+                    self._send(p, notice)
+            return
+        if cmd == "HOST" and len(bits) >= 2 and c.registered:
+            c.host = bits[1].lstrip(":")
+            return
         if cmd == "JOIN" and len(bits) >= 2 and c.registered:
             for raw in bits[1].split(","):
                 ch = raw if raw.startswith("#") else f"#{raw}"
@@ -122,10 +141,46 @@ class LocalIrcd:
                 c.channels.add(ch_l)
                 with self._lock:
                     self._chan_members[ch_l].add(c)
-                self._send(c, f":{c.nick}!u@local JOIN {ch}")
+                # extended-join: nick!u@host JOIN #ch account :realname
+                acct = c.account or "*"
+                join_line = f":{c.nick}!u@{c.host} JOIN {ch} {acct} :{c.nick}"
+                self._send(c, join_line)
+                # broadcast JOIN to others in channel
+                self._broadcast_channel(ch_l, join_line, exclude=c)
                 nicks = " ".join(m.nick for m in self._chan_members[ch_l] if m.nick)
                 self._send(c, f":local 353 {c.nick} = {ch} :{nicks}")
                 self._send(c, f":local 366 {c.nick} {ch} :End")
+            return
+        if cmd == "MODE" and len(bits) >= 3 and c.registered:
+            ch = bits[1]
+            ch_l = ch.lower() if ch.startswith("#") else f"#{ch}".lower()
+            spec = bits[2]
+            args = [a.lstrip(":") for a in bits[3:]]
+            # apply +h/+o tracking
+            adding = True
+            ai = 0
+            with self._lock:
+                bucket = self._chan_modes.setdefault(ch_l, {})
+                for chm in spec:
+                    if chm == "+":
+                        adding = True
+                        continue
+                    if chm == "-":
+                        adding = False
+                        continue
+                    if chm in "ohv" and ai < len(args):
+                        nk = args[ai].lower()
+                        ai += 1
+                        cur = set(bucket.get(nk, ""))
+                        if adding:
+                            cur.add(chm)
+                        else:
+                            cur.discard(chm)
+                        bucket[nk] = "".join(sorted(cur))
+            mode_line = f":{c.nick}!u@{c.host} MODE {ch} {spec} " + " ".join(args)
+            mode_line = mode_line.rstrip()
+            self.mode_log.append(mode_line)
+            self._broadcast_channel(ch_l, mode_line, exclude=None)
             return
         if cmd == "PRIVMSG" and len(bits) >= 3 and c.registered:
             target = bits[1]
@@ -213,12 +268,24 @@ class IrcClient:
         self.sock.settimeout(0.5)
         self.buf = ""
         self.inbox: list[tuple[str, str, str]] = []  # src, target, text
+        self.raw_inbox: list[str] = []
+        self.on_raw: Callable[[str], None] | None = None
         self._send(f"NICK {nick}")
         self._send(f"USER {nick} 0 * :{nick}")
         self._drain_until(lambda: True, timeout=2.0)
 
     def _send(self, line: str) -> None:
         self.sock.sendall((line.rstrip("\r\n") + "\r\n").encode("utf-8"))
+
+    def send_raw(self, line: str) -> None:
+        self._send(line)
+
+    def set_account(self, account: str) -> None:
+        """FR #52 test: bind services account on local ircd."""
+        self._send(f"ACCOUNT {account}")
+
+    def set_host(self, host: str) -> None:
+        self._send(f"HOST {host}")
 
     def join(self, *channels: str) -> None:
         for ch in channels:
@@ -229,6 +296,12 @@ class IrcClient:
         self._send(f"PRIVMSG {target} :{text}")
 
     def _parse(self, line: str) -> None:
+        self.raw_inbox.append(line)
+        if self.on_raw:
+            try:
+                self.on_raw(line)
+            except Exception:
+                pass
         if line.upper().startswith("PING"):
             token = line.split(":", 1)[1] if ":" in line else "x"
             self._send(f"PONG :{token}")

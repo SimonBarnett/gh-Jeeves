@@ -74,6 +74,18 @@ def _reg() -> tuple[CommandSpec, ...]:
             details="Restricted to simon and bob-* nicks. Quiet when unchanged. See FR #25.",
             related=("list", "status"),
         ),
+        CommandSpec(
+            name="sweep",
+            syntax="!sweep [channel]",
+            summary="re-apply +h/+o grants in a channel (simon only)",
+            roles=frozenset({ROLE_SIMON}),
+            example="!sweep #bobiverse",
+            details=(
+                "FR #52: Jeeves auto-grants +h to authenticated bob-* and +o to "
+                "authenticated simon from a fleet host. !sweep re-runs grants; no channel text."
+            ),
+            related=("help", "status"),
+        ),
     )
 
 

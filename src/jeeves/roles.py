@@ -9,6 +9,7 @@ import urllib.request
 from pathlib import Path
 
 from .local_ircd import IrcClient
+from .mode_grants import ModeGrantController
 from .nicks import bored_gate, canonical_worker_nick, worker_shop_channel
 from .offer import EarOfferState, contains_assign, is_single_line
 from .queue import (
@@ -70,6 +71,22 @@ class JeevesChair:
         self.pm_egress: list[tuple[str, str]] = []  # (nick, text) help/list
         self.help_rate = HelpRateLimit()
         self.resync_scheduler = resync_scheduler
+        # FR #52: mode grants (+h bob / +o simon) — account-trusted, no channel text
+        self.mode_grants: ModeGrantController | None = None
+        if hasattr(self.client, "send_raw"):
+            self.mode_grants = ModeGrantController(self.client, jeeves_nick=nick, rate_s=0.05)
+            prev = getattr(self.client, "on_raw", None)
+
+            def _on_raw(line: str) -> None:
+                if prev:
+                    try:
+                        prev(line)
+                    except Exception:
+                        pass
+                if self.mode_grants is not None:
+                    self.mode_grants.handle_raw(line)
+
+            self.client.on_raw = _on_raw  # type: ignore[method-assign]
         # Policy pins — tests assert these stay false.
         assert chair_handles_bored() is False
         assert chair_may_offer() is False
