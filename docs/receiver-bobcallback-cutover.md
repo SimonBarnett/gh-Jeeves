@@ -18,12 +18,16 @@ Local machine / ionos only. **Never** edit Ergo or restart unrelated services fr
 1. Stop old `bobcallback` / BobReport process listening on 19781.
 2. Ensure digest home is the same path ears already use (`BOB_DIGEST_HOME`, typically `~/.agentic-irc-bobiverse`).
 3. Place shared secret where gh-Jeeves loads it (`BOB_CALLBACK_SECRET` or `%BOB_DIGEST_HOME%\bob.secret`).
-4. Start `python -m jeeves receiver` (or combined `python -m jeeves all`) with `--receiver-port 19781`.
-5. Confirm:
+4. **Outbox position (FR #71):** agentic_irc used `chair-outbox.txt.pos`; gh-Jeeves uses `chair-outbox.pos`.
+   - On first start, if only the legacy file exists, Jeeves **migrates** it to `chair-outbox.pos`.
+   - If **neither** pos file exists and `chair-outbox.txt` is non-empty, Jeeves starts at **EOF** (no `#bobiverse` replay flood). Use `--replay-outbox` only when you intentionally want a full drain from offset 0.
+   - Do not hand-edit pos unless recovering a known good byte offset.
+5. Start `python -m jeeves receiver` (or combined `python -m jeeves all`) with `--receiver-port 19781`.
+6. Confirm:
    - `GET http://127.0.0.1:19781/bob/v1/report` returns `machines` + `cursor_pools`.
    - `POST` without header → **401**.
    - Ear/tray `op=merge` with secret updates `machines.<id>.lastSeen` / `pcent`.
-6. Leave IIS binding unchanged.
+7. Leave IIS binding unchanged.
 
 ## Rollback
 
@@ -34,5 +38,5 @@ Local machine / ionos only. **Never** edit Ergo or restart unrelated services fr
 ## Tests
 
 ```text
-pytest -q tests/test_bobcallback_dropin_fr47.py
+pytest -q tests/test_bobcallback_dropin_fr47.py tests/test_outbox_pos_fr71.py
 ```

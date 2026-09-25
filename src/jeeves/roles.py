@@ -27,6 +27,7 @@ from .cast_iron import (
     is_forbidden_shop_egress,
     shop_egress_allowed_for_chair,
 )
+from .outbox_pos import outbox_path, resolve_outbox_start, write_pos
 from .helpcmd import HelpRateLimit, build_help, parse_help
 from .ignore import (
     format_ignored_lines,
@@ -75,10 +76,13 @@ class JeevesChair:
         auto_join: bool = True,
         channel_denylist: list[str] | None = None,
         list_interval_s: float = 60.0,
+        replay_outbox: bool = False,
     ):
         self.home = Path(home)
         self.report_url = report_url.rstrip("/")
         self.nick = nick
+        # FR #71: default never replay historical chair-outbox on cutover
+        self.replay_outbox = bool(replay_outbox)
         # FR #55: shops is optional seed only (not the sole join set)
         self.shops = list(shops) if shops is not None else ["#bobiverse"]
         # FR #46: inject TlsIrcClient for Ergo; default plain G1 IrcClient
@@ -108,6 +112,15 @@ class JeevesChair:
         elif not hasattr(self.client, "send_raw"):
             # legacy static join only
             self.client.join("#bobiverse", *self.shops)
+
+        # FR #71: seed pos once at start — migrate legacy or park at EOF so history
+        # is not replayed; lines appended after this are drained normally.
+        try:
+            ob = outbox_path(self.home)
+            size = ob.stat().st_size if ob.is_file() else 0
+            resolve_outbox_start(self.home, outbox_size=size, replay=self.replay_outbox)
+        except OSError:
+            pass
 
         # Wire raw JOIN/ACCOUNT/MODE/LIST/KICK into FR52 + FR55 controllers
         if self.mode_grants is not None or self.auto_join_ctrl is not None:
@@ -196,21 +209,17 @@ class JeevesChair:
             resp.read()
 
     def _drain_outbox(self) -> None:
-        path = self.home / "chair-outbox.txt"
-        pos_path = self.home / "chair-outbox.pos"
+        # FR #71: chair-outbox.pos (migrate legacy .txt.pos; no replay unless flag)
+        path = outbox_path(self.home)
         if not path.is_file():
             return
-        pos = 0
-        if pos_path.is_file():
-            try:
-                pos = int(pos_path.read_text(encoding="utf-8").strip() or "0")
-            except ValueError:
-                pos = 0
         data = path.read_bytes()
-        if pos > len(data):
-            pos = 0
+        pos = resolve_outbox_start(
+            self.home, outbox_size=len(data), replay=self.replay_outbox
+        )
         chunk = data[pos:].decode("utf-8", errors="replace")
         if not chunk:
+            write_pos(self.home, len(data))
             return
         for line in chunk.splitlines():
             line = line.strip()
@@ -227,7 +236,7 @@ class JeevesChair:
             else:
                 self.client.privmsg("#bobiverse", line)
                 self.handled.append(f"announce:{line}")
-        pos_path.write_text(str(len(data)), encoding="utf-8")
+        write_pos(self.home, len(data))
 
     def _handle_list(self, src: str, text: str) -> None:
         """FR #50 / #208: !list from channel or PM → PM only; never channel flood."""
