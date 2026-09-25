@@ -45,6 +45,15 @@ class LocalIrcd:
         # FR #52: channel -> nick -> mode chars
         self._chan_modes: dict[str, dict[str, str]] = defaultdict(dict)
         self.mode_log: list[str] = []
+        # FR #55: channels known to the server (for LIST), even with zero members
+        self._known_channels: set[str] = set()
+
+    def ensure_channel(self, channel: str) -> None:
+        """Create/advertise a channel name for LIST (tests create #b later)."""
+        ch = channel if channel.startswith("#") else f"#{channel}"
+        with self._lock:
+            self._known_channels.add(ch.lower())
+            self._chan_members.setdefault(ch.lower(), set())
 
     @property
     def bound_port(self) -> int:
@@ -123,13 +132,12 @@ class LocalIrcd:
         if cmd == "ACCOUNT" and len(bits) >= 2 and c.registered:
             # test helper: ACCOUNT <name>  — sets services account for this client
             c.account = bits[1].lstrip(":")
-            # notify channel peers (account-notify style)
             notice = f":{c.nick}!u@{c.host} ACCOUNT {c.account}"
             with self._lock:
                 peers = list(self._clients)
-            for p in peers:
-                if p is not c:
-                    self._send(p, notice)
+            for ppeer in peers:
+                if ppeer is not c:
+                    self._send(ppeer, notice)
             return
         if cmd == "HOST" and len(bits) >= 2 and c.registered:
             c.host = bits[1].lstrip(":")
@@ -140,12 +148,12 @@ class LocalIrcd:
                 ch_l = ch.lower()
                 c.channels.add(ch_l)
                 with self._lock:
+                    self._known_channels.add(ch_l)
                     self._chan_members[ch_l].add(c)
                 # extended-join: nick!u@host JOIN #ch account :realname
                 acct = c.account or "*"
                 join_line = f":{c.nick}!u@{c.host} JOIN {ch} {acct} :{c.nick}"
                 self._send(c, join_line)
-                # broadcast JOIN to others in channel
                 self._broadcast_channel(ch_l, join_line, exclude=c)
                 nicks = " ".join(m.nick for m in self._chan_members[ch_l] if m.nick)
                 self._send(c, f":local 353 {c.nick} = {ch} :{nicks}")
@@ -156,7 +164,6 @@ class LocalIrcd:
             ch_l = ch.lower() if ch.startswith("#") else f"#{ch}".lower()
             spec = bits[2]
             args = [a.lstrip(":") for a in bits[3:]]
-            # apply +h/+o tracking
             adding = True
             ai = 0
             with self._lock:
@@ -181,6 +188,32 @@ class LocalIrcd:
             mode_line = mode_line.rstrip()
             self.mode_log.append(mode_line)
             self._broadcast_channel(ch_l, mode_line, exclude=None)
+            return
+        if cmd == "LIST" and c.registered:
+            with self._lock:
+                names = sorted(set(self._known_channels) | set(self._chan_members.keys()))
+                counts = {k: len(self._chan_members.get(k, set())) for k in names}
+            for ch_l in names:
+                ch = ch_l if ch_l.startswith("#") else f"#{ch_l}"
+                n = counts.get(ch_l, 0)
+                self._send(c, f":local 322 {c.nick} {ch} {n} :channel")
+            self._send(c, f":local 323 {c.nick} :End of LIST")
+            return
+        if cmd == "KICK" and len(bits) >= 3 and c.registered:
+            ch = bits[1] if bits[1].startswith("#") else f"#{bits[1]}"
+            victim = bits[2]
+            reason = line.split(":", 1)[1] if ":" in line else "kicked"
+            with self._lock:
+                members = list(self._chan_members.get(ch.lower(), set()))
+            kick_line = f":{c.nick}!u@local KICK {ch} {victim} :{reason}"
+            for m in members:
+                self._send(m, kick_line)
+            # remove victim from channel
+            with self._lock:
+                for m in list(self._chan_members.get(ch.lower(), set())):
+                    if m.nick.lower() == victim.lower():
+                        self._chan_members[ch.lower()].discard(m)
+                        m.channels.discard(ch.lower())
             return
         if cmd == "PRIVMSG" and len(bits) >= 3 and c.registered:
             target = bits[1]
@@ -268,7 +301,7 @@ class IrcClient:
         self.sock.settimeout(0.5)
         self.buf = ""
         self.inbox: list[tuple[str, str, str]] = []  # src, target, text
-        self.raw_inbox: list[str] = []
+        self.raw_inbox: list[str] = []  # all lines (FR #55 LIST/KICK)
         self.on_raw: Callable[[str], None] | None = None
         self._send(f"NICK {nick}")
         self._send(f"USER {nick} 0 * :{nick}")
@@ -278,6 +311,7 @@ class IrcClient:
         self.sock.sendall((line.rstrip("\r\n") + "\r\n").encode("utf-8"))
 
     def send_raw(self, line: str) -> None:
+        """FR #52/#55: MODE / LIST / raw protocol."""
         self._send(line)
 
     def set_account(self, account: str) -> None:
@@ -294,6 +328,9 @@ class IrcClient:
 
     def privmsg(self, target: str, text: str) -> None:
         self._send(f"PRIVMSG {target} :{text}")
+
+    def kick(self, channel: str, nick: str, reason: str = "out") -> None:
+        self._send(f"KICK {channel} {nick} :{reason}")
 
     def _parse(self, line: str) -> None:
         self.raw_inbox.append(line)

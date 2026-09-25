@@ -24,17 +24,18 @@ A release is not shippable unless G1 is green and G2 is recorded.
 5. Announce → accepted-worker path is fully deterministic (scripts only; works during token outage).
 6. Supersede: FR+PR → MRB; MRB PASS merged → UAT; PR closed unmerged → restore FR; issue closed → remove; issue reopened → re-add FR.
 7. MRB process: PASS merges and closes FR; FAIL one fix PR, merge both, FR stays open; only Bob stamps UAT.
-8. `!list` by PM returns unaccepted queue by PM.
+8. `!list` typed in-channel or by PM returns the queue **by PM only** (nothing in channel). Format `FR|MRB|UAT owner/repo#n title`. `!list all` includes accepted; `!list <repo>` filters; no silent row cap (page default 30 + explicit `... and M more`).
 9. Ergo ops: `bob-{machine}` op in `#{machine}`; `Jeeves` op in `#bobiverse`; simon ops only via fleet client cert (Ergo config owned elsewhere).
 10. Jeeves runs as its own Windows service.
 11. Worker busy/idle observable from ACK/DONE; wakes serialised; never mistaken for idle while a hidden run works.
+12. Auto-join (FR #55): on connect/reconnect Jeeves LISTs the server and JOINs every channel (denylist skips); periodic re-LIST joins new shops; KICK backoff; shops config is seed only.
 
 ## Scope (owns)
 
 1. Announce chair (TLS IRC client, reconnect backoff, singleton nick, 417-safe split).
 2. Queue engine with supersede reducer; `queue.json` crash mirror; webhook source of truth.
-3. Shop listener for ACK/DONE/NACK/GIVEUP; silent; never !bored/offers.
-4. `!list` PM replies (capped, rate-limited).
+3. Shop listener for ACK/DONE/NACK/GIVEUP; silent; never !bored/offers; LIST auto-join every channel (FR #55).
+4. `!list` PM replies (in-channel or PM; rate-limited; page + explicit more-hint; FLOOD_S paced).
 5. Webhook writer for accepted/done/busy/idle.
 6. GitHub receiver `/bob/v1/git` including secret-field filter fix.
 7. Service installer `BobJeeves` (never touch Ergo/BobIrcd).
@@ -52,7 +53,7 @@ LLM features, offering/assigning, Ergo/BobIrcd config, TipForm UI, worker implem
 - Accept: `ACK <TYPE> <owner/repo>#<n>`
 - Complete: `DONE <TYPE> <owner/repo>#<n> <result> <url>`
 - Return: `NACK|GIVEUP <TYPE> <owner/repo>#<n>`
-- List: `/msg Jeeves !list`
+- List: `!list [all|<repo>|fr|mrb|uat]` in channel or `/msg Jeeves` → PM lines only; one job per line under 400 bytes
 - Nicks: `{machine}-{pid}` and legacy `w-<short>-<pid>` in own shop only.
 
 ## Skills overlay

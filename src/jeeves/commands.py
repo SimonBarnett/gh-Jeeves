@@ -49,11 +49,15 @@ def _reg() -> tuple[CommandSpec, ...]:
         ),
         CommandSpec(
             name="list",
-            syntax="!list [all|<repo>]",
-            summary="unaccepted queue, one line per job (PM only)",
+            syntax="!list [all|<repo>|fr|mrb|uat]",
+            summary="queue by PM: one line per job (type in channel; reply is PM)",
             roles=ALL_ROLES,
             example="!list SimonBarnett/gh-Jeeves",
-            details="Same no-flood rules as help: PM only, paced lines under 400 bytes.",
+            details=(
+                "In-channel or PM. Format: FR owner/repo#n title. "
+                "!list all includes accepted; !list <repo> filters. "
+                "Paced PM lines under 400 bytes; truncated lists end with +M more."
+            ),
             related=("help", "status", "resync"),
         ),
         CommandSpec(

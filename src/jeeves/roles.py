@@ -8,6 +8,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+from .channel_join import AutoJoinController, normalize_channel
 from .local_ircd import IrcClient
 from .mode_grants import ModeGrantController
 from .nicks import bored_gate, canonical_worker_nick, worker_shop_channel
@@ -27,7 +28,7 @@ from .cast_iron import (
     shop_egress_allowed_for_chair,
 )
 from .helpcmd import HelpRateLimit, build_help, parse_help
-from .listfmt import format_unaccepted_list, list_rate_notice, list_rate_ok
+from .listfmt import FLOOD_S, format_unaccepted_list, list_rate_notice, list_rate_ok
 from .wire import (
     is_bored,
     is_help,
@@ -58,14 +59,18 @@ class JeevesChair:
         shops: list[str] | None = None,
         resync_scheduler=None,
         client=None,
+        *,
+        auto_join: bool = True,
+        channel_denylist: list[str] | None = None,
+        list_interval_s: float = 60.0,
     ):
         self.home = Path(home)
         self.report_url = report_url.rstrip("/")
         self.nick = nick
-        self.shops = shops or ["#flamingo"]
+        # FR #55: shops is optional seed only (not the sole join set)
+        self.shops = list(shops) if shops is not None else ["#bobiverse"]
         # FR #46: inject TlsIrcClient for Ergo; default plain G1 IrcClient
         self.client = client if client is not None else IrcClient(host, port, nick)
-        self.client.join("#bobiverse", *self.shops)
         self._stop = threading.Event()
         self._t = threading.Thread(target=self._run, name="jeeves-chair", daemon=True)
         self.handled: list[str] = []
@@ -77,6 +82,23 @@ class JeevesChair:
         self.mode_grants: ModeGrantController | None = None
         if hasattr(self.client, "send_raw"):
             self.mode_grants = ModeGrantController(self.client, jeeves_nick=nick, rate_s=0.05)
+
+        self.auto_join_ctrl: AutoJoinController | None = None
+        if auto_join and hasattr(self.client, "send_raw"):
+            seed = list(dict.fromkeys(["#bobiverse", *[normalize_channel(s) for s in self.shops]]))
+            self.auto_join_ctrl = AutoJoinController(
+                self.client,
+                nick=nick,
+                denylist=channel_denylist or [],
+                seed=seed,
+                list_interval_s=list_interval_s,
+            )
+        elif not hasattr(self.client, "send_raw"):
+            # legacy static join only
+            self.client.join("#bobiverse", *self.shops)
+
+        # Wire raw JOIN/ACCOUNT/MODE/LIST/KICK into FR52 + FR55 controllers
+        if self.mode_grants is not None or self.auto_join_ctrl is not None:
             prev = getattr(self.client, "on_raw", None)
 
             def _on_raw(line: str) -> None:
@@ -87,8 +109,14 @@ class JeevesChair:
                         pass
                 if self.mode_grants is not None:
                     self.mode_grants.handle_raw(line)
+                if self.auto_join_ctrl is not None:
+                    self.auto_join_ctrl.handle_raw(line)
 
             self.client.on_raw = _on_raw  # type: ignore[method-assign]
+        if self.auto_join_ctrl is None and hasattr(self.client, "send_raw"):
+            # auto_join disabled but client can send_raw — still static join
+            if not auto_join:
+                self.client.join("#bobiverse", *self.shops)
         # Policy pins — tests assert these stay false.
         assert chair_handles_bored() is False
         assert chair_may_offer() is False
@@ -110,10 +138,18 @@ class JeevesChair:
         if self.resync_scheduler is not None:
             # rebuild task list on start (FR #25); scheduler owns periodic loop
             self.resync_scheduler.start(run_immediately=True)
+        if self.auto_join_ctrl is not None:
+            self.auto_join_ctrl.start(list_immediately=True)
+            self.handled.append("autojoin_start")
         self._t.start()
 
     def stop(self) -> None:
         self._stop.set()
+        if self.auto_join_ctrl is not None:
+            try:
+                self.auto_join_ctrl.stop()
+            except Exception:
+                pass
         if self.resync_scheduler is not None:
             try:
                 self.resync_scheduler.stop()
@@ -172,7 +208,7 @@ class JeevesChair:
         pos_path.write_text(str(len(data)), encoding="utf-8")
 
     def _handle_list(self, src: str, text: str) -> None:
-        """FR #39 / #208: !list by PM only (channel or PM)."""
+        """FR #50 / #208: !list from channel or PM → PM only; never channel flood."""
         if not list_rate_ok(src):
             self._pm(src, list_rate_notice(src))
             self.handled.append(f"list_rate:{src}")
@@ -181,8 +217,11 @@ class JeevesChair:
         lines = format_unaccepted_list(
             self.home, task_filter=task_f, repo_filter=repo_f, list_all=list_all
         )
-        for line in lines:
+        # Pace under Ergo flood (one PM per FLOOD_S)
+        for i, line in enumerate(lines):
             self._pm(src, line)
+            if i + 1 < len(lines) and FLOOD_S > 0:
+                time.sleep(FLOOD_S)
         self.handled.append(f"list_pm:{src}:{len(lines)}")
 
     def _handle_help(self, src: str, text: str) -> None:
@@ -213,7 +252,6 @@ class JeevesChair:
             return
         if not ch:
             ch = target if target.startswith("#") else "#bobiverse"
-        # Prefer NAMES-driven resweep; also grant known accounts immediately.
         try:
             self.client.send_raw(f"NAMES {ch}")
         except Exception:
@@ -324,7 +362,10 @@ class JeevesChair:
                 if callable(recon):
                     try:
                         recon()
-                        self.client.join("#bobiverse", *self.shops)
+                        if self.auto_join_ctrl is not None:
+                            self.auto_join_ctrl.note_reconnect()
+                        else:
+                            self.client.join("#bobiverse", *self.shops)
                     except Exception:
                         time.sleep(1.0)
                 msg = None
