@@ -29,7 +29,30 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--nick", default=os.environ.get("AGENTIC_IRC_CHAIR_NICK") or "Jeeves")
     p.add_argument("--host", default=os.environ.get("AGENTIC_IRC_HOST") or "127.0.0.1")
     p.add_argument("--port", type=int, default=int(os.environ.get("AGENTIC_IRC_PORT") or "0"))
-    p.add_argument("--tls", action="store_true", help="TLS to Ergo (production)")
+    p.add_argument("--tls", action="store_true", help="TLS to Ergo (native client, FR #46)")
+    p.add_argument(
+        "--tls-insecure",
+        action="store_true",
+        help="TLS without cert verify (G1 local self-signed only)",
+    )
+    p.add_argument(
+        "--tls-cafile",
+        default=os.environ.get("JEEVES_TLS_CAFILE") or "",
+        help="Optional PEM CA bundle for Ergo",
+    )
+    p.add_argument(
+        "--tls-pin-sha256",
+        default=os.environ.get("JEEVES_TLS_PIN_SHA256") or "",
+        help="Optional SHA-256 pin of server DER cert (hex)",
+    )
+    p.add_argument(
+        "--sasl-user",
+        default=os.environ.get("AGENTIC_IRC_SASL_USER") or "",
+    )
+    p.add_argument(
+        "--sasl-password",
+        default=os.environ.get("AGENTIC_IRC_SASL_PASSWORD") or "",
+    )
     p.add_argument(
         "--digest-home",
         default=os.environ.get("BOB_DIGEST_HOME") or "",
@@ -87,6 +110,9 @@ def dry_run_plan(args: argparse.Namespace) -> dict:
         "never_touch": ["Ergo", "BobIrcd", "ircd.yaml"],
         "queue_path": str(dh / "queue.json"),
         "entry": "python -m jeeves",
+        "irc_client": "jeeves.tls_irc.TlsIrcClient" if args.tls else "jeeves.local_ircd.IrcClient",
+        "native_tls": True,
+        "no_agentic_irc_bridge": True,
         "version": ver.get("version"),
         "jeeves_version": ver.get("jeeves_version"),
         "version_drift": ver.get("version_drift"),
@@ -203,26 +229,32 @@ def main(argv: list[str] | None = None) -> int:
             except KeyboardInterrupt:
                 pass
         else:
-            # Production TLS client is intentionally thin: prefer operator to set
-            # AGENTIC_IRC via Start-BobJeeves which launches this module against
-            # loopback test ircd OR injects a real client later. For Ergo TLS we
-            # require agentic_irc irc_agent bridge until full wire port lands.
+            # FR #46: native TLS client (no agentic_irc irc_agent bridge)
+            client = None
             if args.tls:
+                if port <= 0:
+                    port = int(os.environ.get("AGENTIC_IRC_PORT") or "6697")
+                if host in ("127.0.0.1", "0.0.0.0", "") and not os.environ.get("AGENTIC_IRC_HOST"):
+                    host = os.environ.get("AGENTIC_IRC_HOST") or "irc.ntsa.uk"
+                from .tls_irc import TlsIrcClient
+
+                client = TlsIrcClient(
+                    host,
+                    port,
+                    args.nick,
+                    tls=True,
+                    insecure=bool(args.tls_insecure),
+                    cafile=args.tls_cafile or None,
+                    cert_pin_sha256=args.tls_pin_sha256 or None,
+                    password=args.password or "",
+                    sasl_user=args.sasl_user or "",
+                    sasl_password=args.sasl_password or "",
+                )
                 print(
-                    "INFO FR #39: TLS Ergo chair uses report/receiver from this package; "
-                    "wire IRC via agentic_irc irc_agent --chair until full TLS client lands. "
-                    f"digest_home={dh} jeeves_home={jh}",
+                    f"INFO FR #46 native TLS IRC client host={host}:{port} "
+                    f"insecure={bool(args.tls_insecure)} digest_home={dh}",
                     flush=True,
                 )
-                # Keep process alive as receiver owner when mode=all
-                if args.mode == "all" and receiver:
-                    try:
-                        while True:
-                            time.sleep(3600)
-                    except KeyboardInterrupt:
-                        pass
-                else:
-                    return 0
             chair = JeevesChair(
                 host,
                 port,
@@ -230,10 +262,12 @@ def main(argv: list[str] | None = None) -> int:
                 report_base,
                 nick=args.nick,
                 shops=shops,
+                client=client,
             )
             chair.start()
             print(
-                f"INFO chair nick={args.nick} host={host}:{port} shops={shops} digest={dh}",
+                f"INFO chair nick={args.nick} host={host}:{port} tls={bool(args.tls)} "
+                f"shops={shops} digest={dh}",
                 flush=True,
             )
             try:

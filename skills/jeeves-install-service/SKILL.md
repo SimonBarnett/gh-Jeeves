@@ -47,6 +47,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Start-BobReport.ps1 -D
 
 # Entry point used by the service
 # python -m jeeves receiver --digest-home $env:USERPROFILE\.agentic-irc-bobiverse --receiver-bind 127.0.0.1 --receiver-port 19781
+
+# Chair on Ergo TLS (FR #46 native client — no agentic_irc irc_agent)
+# python -m jeeves chair --tls --host irc.ntsa.uk --port 6697
+# Optional: JEEVES_TLS_CAFILE, JEEVES_TLS_PIN_SHA256, AGENTIC_IRC_SASL_USER/PASSWORD
 ```
 
 Exit codes: `0` ok, `2` validation errors.
