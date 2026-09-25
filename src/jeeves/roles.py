@@ -25,7 +25,8 @@ from .cast_iron import (
     is_forbidden_shop_egress,
     shop_egress_allowed_for_chair,
 )
-from .wire import is_bored, is_list, parse_ack, parse_done, parse_nack  # noqa: F401
+from .helpcmd import HelpRateLimit, build_help, parse_help
+from .wire import is_bored, is_help, is_list, parse_ack, parse_done, parse_nack  # noqa: F401
 
 
 class JeevesChair:
@@ -55,10 +56,17 @@ class JeevesChair:
         self._t = threading.Thread(target=self._run, name="jeeves-chair", daemon=True)
         self.handled: list[str] = []
         self.shop_egress: list[tuple[str, str]] = []  # (channel, text) if any slip through
+        self.pm_egress: list[tuple[str, str]] = []  # (nick, text) help/list
+        self.help_rate = HelpRateLimit()
         self.resync_scheduler = resync_scheduler
         # Policy pins — tests assert these stay false.
         assert chair_handles_bored() is False
         assert chair_may_offer() is False
+
+    def _pm(self, nick: str, text: str) -> None:
+        """Private message only (help/list). Never channel flood."""
+        self.pm_egress.append((nick, text))
+        self.client.privmsg(nick, text)
 
     def _shop_privmsg(self, channel: str, text: str) -> None:
         """Chair must remain silent in shops (K1). Block claim/offer egress."""
@@ -133,16 +141,30 @@ class JeevesChair:
                 self.handled.append(f"announce:{line}")
         pos_path.write_text(str(len(data)), encoding="utf-8")
 
+    def _handle_help(self, src: str, text: str) -> None:
+        """FR #27: !help always answered by PM, never in channel."""
+        ok, arg = parse_help(text)
+        if not ok:
+            return
+        result = build_help(src, arg, rate=self.help_rate)
+        for line in result.lines:
+            self._pm(src, line)
+        self.handled.append(f"help:{src}:{arg or '*'}:{len(result.lines)}")
+
     def _handle_shop(self, src: str, target: str, text: str) -> None:
+        # !help from channel or PM → reply by PM only (no channel flood)
+        if is_help(text) or parse_help(text)[0]:
+            self._handle_help(src, text)
+            return
         if not target.startswith("#"):
             if is_list(text):
                 q = load_queue(self.home)
                 rows = q.get("unaccepted") or []
                 if not rows:
-                    self.client.privmsg(src, "queue empty")
+                    self._pm(src, "queue empty")
                 else:
                     for row in rows[:10]:
-                        self.client.privmsg(
+                        self._pm(
                             src,
                             f"{row.get('task')} {row.get('repo')}{row.get('id')} {row.get('line') or ''}".strip(),
                         )
