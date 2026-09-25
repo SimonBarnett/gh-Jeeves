@@ -20,16 +20,24 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 
 Machine-read lines use `src/gh_jeeves/announce.py`:
 
-- Vital fields first (event, task, `owner/repo#n`, action, URL, fixes, head); title last and truncated only.
-- Byte budget = IRC 512 − (`:nick!user@host PRIVMSG #chan :` + CRLF).
-- Pre-send `validate_round_trip` / `prepare_send`; failures write `queue_events/` (queue from webhook, not IRC).
-- Simulated 417 → `handle_simulated_417` log + queue event.
-- Tests: `pytest tests/test_announce_fr24.py` (token-less; part of gate surface).
+- Vital fields first (event, task FR/MRB/UAT, `owner/repo#n`, action, URL,
+  `fixes:…`, `head:…`); title last; only the title is truncated (`...`).
+- Budget by UTF-8 **bytes** vs IRC 512 including `:nick!user@host PRIVMSG #chan :`
+  and CRLF (`text_budget` / `wire_line_bytes`). Never cut mid-codepoint.
+- Compact fallback when vitals alone overflow; never a parser-required
+  continuation line.
+- Pre-send: `validate_before_send` / `prepare_send` round-trip with `parse_announce`.
+  Failures log ERROR; queue still written from webhook vitals (`MemoryQueue` /
+  `QueueEvent`) — queue never depends on IRC text.
+- Simulated 417: `simulate_417` logs preview; queue item remains.
+- Tests (token-less, gate surface): `pytest tests/test_announce_length_fr24.py`
 
 ## Checklist (delivery missing)
 
 1. GitHub hook delivery → 2xx on `/bob/v1/git`?
-2. Secret-field filter (K14 / agentic_irc #206) — body text must not reject whole payload.
-3. `chair-outbox` / announce body under budget (`utf8_len(body) <= body_budget()`).
-4. Ergo 417 → check logs for `ERROR IRC 417`; queue event file still present.
+2. Secret-field filter (K14 / agentic_irc #206) — scan emitted fields only.
+3. `prepare_send` body under budget (`wire_line_bytes(line) <= 512`).
+4. Ergo 417 → log `ERROR 417`; queue event still present.
 5. Never continue a vital field onto a second IRC line.
+
+Do **not** restart live ionos / Ergo / Jeeves from implementer seats unless assigned.
