@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+_log = logging.getLogger("jeeves.receiver")
 
 from .announce import process_git_webhook
 from .auth_secret import check_bob_secret, load_bob_secret
@@ -113,9 +116,21 @@ def make_handler(state: DigestState):
         def _read_json(self) -> dict:
             raw = self._read_raw()
             try:
-                return json.loads(raw.decode("utf-8"))
-            except json.JSONDecodeError:
+                obj = json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 return {}
+            return obj if isinstance(obj, dict) else {}
+
+        def _read_git_json(self) -> tuple[dict | None, str | None]:
+            """FR #15 / K14: invalid JSON is a client error (400), not an empty dict."""
+            raw = self._read_raw()
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return None, f"invalid_json:{exc.__class__.__name__}"
+            if not isinstance(obj, dict):
+                return None, "invalid_json:not_object"
+            return obj, None
 
         def _send_json(self, code: int, obj: dict) -> None:
             body = json.dumps(obj).encode("utf-8")
@@ -160,8 +175,31 @@ def make_handler(state: DigestState):
                     self.end_headers()
                     return
             if path == "/bob/v1/git":
-                event = self.headers.get("X-GitHub-Event") or ""
-                payload = self._read_json()
+                # FR #15 / agentic_irc #206: 400 only for malformed requests (missing
+                # event header / invalid JSON). Secret *mentions* in title/body must
+                # not 400 — process_git_webhook scans secret-bearing fields only.
+                def _send_git_400(reason: str) -> None:
+                    body = reason.encode("utf-8")
+                    self.send_response(400)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                event = (self.headers.get("X-GitHub-Event") or "").strip()
+                if not event:
+                    _log.warning("git_webhook_reject reason=missing_event_header")
+                    _send_git_400("missing_event_header")
+                    return
+                payload, jerr = self._read_git_json()
+                if jerr or payload is None:
+                    _log.warning(
+                        "git_webhook_reject reason=%s event=%s",
+                        jerr or "invalid_json",
+                        event,
+                    )
+                    _send_git_400(jerr or "invalid_json")
+                    return
                 with state.lock:
                     line, claim, reject = process_git_webhook(
                         event, payload, home=state.home
@@ -175,9 +213,19 @@ def make_handler(state: DigestState):
                             self.send_response(204)
                             self.end_headers()
                             return
-                        self.send_response(400)
-                        self.end_headers()
-                        self.wfile.write(reject.encode("utf-8"))
+                        # Log marker *name* only (reject is secret_field:<marker>).
+                        repo = (
+                            (payload.get("repository") or {})
+                            if isinstance(payload, dict)
+                            else {}
+                        ).get("full_name") or ""
+                        _log.warning(
+                            "git_webhook_reject reason=%s event=%s repo=%s",
+                            reject,
+                            event,
+                            repo,
+                        )
+                        _send_git_400(reject)
                         return
                     if line:
                         state.announces.append(line)

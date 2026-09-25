@@ -157,8 +157,9 @@ Seed skills (each is a seed FR with a test or lint that checks the skill exists 
   - `POST /bob/v1/report`: fleet writes, authenticated by a shared-secret header (value redacted). Ops: `merge`, `delete-worker`, `shop-down`, `git-claim`.
   - `GET/HEAD /bob/v1/report`, `/bob/v1/digest`, `/digest`: the public JSON digest, including `queue`.
   - A POST is only accepted from allow-listed IPs (default loopback).
-- **`bobreport.apply_git_webhook`:**
-  - Runs a secret-marker filter over the **whole payload**. This is gap #206: an issue that merely *mentions* a marker is rejected with 400 and never announced.
+- **`bobreport.apply_git_webhook` / gh-Jeeves `process_git_webhook`:**
+  - **Was:** secret-marker filter over the **whole payload** (gap #206 / K14): an issue that merely *mentions* a marker was rejected with 400 and never announced.
+  - **Now (FR #15):** scan only secret-bearing fields; title/body mentions still announce (title redacted when needed). Missing `X-GitHub-Event` or invalid JSON → 400 + log.
   - Formats the line with `format_github_webhook_announce`: `GIT <event> <owner/repo> [<action> #<n> <title≤120>] [by <actor>]`, max 380 characters. Push: `GIT push <repo> <branch> <sha12> N commit(s)`. Ping: `GIT ping <repo> <zen>`.
   - Enqueues a claim through `gitclaim.claim_from_payload`.
   - Appends `PRIVMSG #bobiverse :<line>` to `chair-outbox.txt` in the digest home.
