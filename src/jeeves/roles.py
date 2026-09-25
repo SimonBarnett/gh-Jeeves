@@ -267,7 +267,18 @@ class JeevesChair:
                 self._drain_outbox()
             except Exception:
                 pass
-            msg = self.client.wait_privmsg(timeout=0.3)
+            try:
+                msg = self.client.wait_privmsg(timeout=0.3)
+            except OSError:
+                # FR #46: native TLS client reconnect-in-place (backoff on throttle)
+                recon = getattr(self.client, "reconnect", None)
+                if callable(recon):
+                    try:
+                        recon()
+                        self.client.join("#bobiverse", *self.shops)
+                    except Exception:
+                        time.sleep(1.0)
+                msg = None
             if msg:
                 src, target, text = msg
                 try:

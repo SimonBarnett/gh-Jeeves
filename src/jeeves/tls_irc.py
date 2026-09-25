@@ -227,13 +227,24 @@ class TlsIrcClient:
             except socket.timeout:
                 continue
             except OSError:
-                break
+                # FR #46 AC1: drop → reconnect in place with throttle backoff
+                try:
+                    self.reconnect()
+                except OSError:
+                    break
+                continue
             if not data:
-                break
+                # peer closed
+                try:
+                    self.reconnect()
+                except OSError:
+                    break
+                continue
             self.buf += data.decode("utf-8", errors="replace")
             while "\n" in self.buf:
                 raw, self.buf = self.buf.split("\n", 1)
                 self._parse(raw.strip("\r"))
+                # throttle ERROR may have set last_throttle; next reconnect backs off
         return pred()
 
     def wait_privmsg(self, predicate=None, timeout: float = 5.0) -> tuple[str, str, str] | None:
