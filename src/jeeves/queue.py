@@ -13,10 +13,25 @@ QUEUE_VERSION = 1
 ACCEPTED_CAP = 200
 DONE_CAP = 200
 
+# FR #102: workers with ts older than this are expired (QUIT or unseen).
+DEFAULT_STALE_WORKER_S = 1800.0
+
 # agentic_irc #207-compatible closes grammar (Closes/Fixes/Resolves/Refs #n).
 _CLOSES_RE = re.compile(
     r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s+#(\d+)\b",
 )
+
+# Log-once set for no-match ACK reasons (cleared in tests).
+_ack_no_match_logged: set[str] = set()
+
+
+def tasks_equivalent(a: str, b: str) -> bool:
+    """FR #102: legacy issue rows queued as PR match an ACK FR (and vice versa)."""
+    x = str(a or "").upper()
+    y = str(b or "").upper()
+    if x == y:
+        return True
+    return {x, y} <= {"FR", "PR"}
 
 
 @dataclass(frozen=True)
@@ -49,6 +64,22 @@ def queue_path(home: Path) -> Path:
     return Path(home) / "queue.json"
 
 
+def _migrate_legacy_pr_tasks(doc: dict[str, Any]) -> bool:
+    """FR #102: early issues queued as task=PR → FR so ACK FR can match."""
+    changed = False
+    for bucket in ("unaccepted", "accepted", "done"):
+        rows = doc.get(bucket)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("task") or "").upper() == "PR":
+                row["task"] = "FR"
+                changed = True
+    return changed
+
+
 def load_queue(home: Path) -> dict[str, Any]:
     path = queue_path(home)
     if not path.is_file():
@@ -65,6 +96,11 @@ def load_queue(home: Path) -> dict[str, Any]:
             doc[k] = []
     if not isinstance(doc.get("workers"), dict):
         doc["workers"] = {}
+    if _migrate_legacy_pr_tasks(doc):
+        try:
+            save_queue(home, doc)
+        except OSError:
+            pass
     return doc
 
 
@@ -428,18 +464,43 @@ def _norm_repo(repo: str) -> str:
 
 
 def find_unaccepted(doc: dict, task: str, repo: str, ident: str) -> dict | None:
-    """Locate unaccepted row (case-insensitive task; #n normalized)."""
+    """Locate unaccepted row (case-insensitive task; #n normalized; FR↔PR)."""
     ident = _norm_ident(ident)
     repo = _norm_repo(repo)
     task_u = str(task or "").upper()
     for row in doc.get("unaccepted") or []:
         if (
             _norm_repo(str(row.get("repo") or "")) == repo
-            and str(row.get("task") or "").upper() == task_u
+            and tasks_equivalent(str(row.get("task") or ""), task_u)
             and _norm_ident(str(row.get("id") or "")) == ident
         ):
             return row
     return None
+
+
+def _mark_worker_busy(
+    doc: dict[str, Any],
+    nick_s: str,
+    *,
+    repo: str,
+    task_u: str,
+    ident: str,
+    channel_s: str,
+) -> None:
+    doc.setdefault("workers", {})[nick_s] = {
+        "state": "busy",
+        "job": f"{repo} {task_u} {ident}",
+        "channel": channel_s,
+        "ts": _utc_now(),
+    }
+
+
+def _same_machine_nicks(a: str, b: str) -> bool:
+    from .nicks import parse_worker_nick
+
+    pa = parse_worker_nick(a)
+    pb = parse_worker_nick(b)
+    return bool(pa and pb and pa[0] == pb[0])
 
 
 def accept_job(
@@ -450,31 +511,60 @@ def accept_job(
     repo: str,
     ident: str,
 ) -> tuple[str, dict | None]:
-    """K3 / FR #4: ACK path — unaccepted → accepted; worker busy.
+    """K3 / FR #4 / FR #102: ACK path — unaccepted → accepted; worker always busy.
 
     Idempotent: if already accepted by the same nick, return accepted again.
+    Legacy PR-typed issue rows match ACK FR. Same-machine seat restart reassigns.
+    Parseable ACK with no queue row still records the worker busy (no_match).
     """
     doc = load_queue(home)
     ident = _norm_ident(ident)
     repo = _norm_repo(repo)
     task_u = str(task or "").upper()
+    if task_u == "PR":
+        task_u = "FR"
     nick_s = str(nick or "").strip()
     channel_s = str(channel or "").strip()
+
+    def _busy() -> None:
+        _mark_worker_busy(
+            doc, nick_s, repo=repo, task_u=task_u, ident=ident, channel_s=channel_s
+        )
 
     # Already accepted by this nick?
     for row in list(doc.get("accepted") or []):
         if (
             _norm_repo(str(row.get("repo") or "")) == repo
-            and str(row.get("task") or "").upper() == task_u
+            and tasks_equivalent(str(row.get("task") or ""), task_u)
             and _norm_ident(str(row.get("id") or "")) == ident
             and str(row.get("nick") or "") == nick_s
         ):
-            doc["workers"][nick_s] = {
-                "state": "busy",
-                "job": f"{repo} {task_u} {ident}",
-                "channel": channel_s or str(row.get("channel") or ""),
-                "ts": _utc_now(),
-            }
+            row["task"] = "FR" if tasks_equivalent(row.get("task"), "FR") else str(row.get("task") or task_u).upper()
+            if str(row.get("task") or "").upper() == "PR":
+                row["task"] = "FR"
+            _busy()
+            save_queue(home, doc)
+            return "accepted", row
+
+    # Same-machine re-ACK: reassign accepted row held by a prior seat pid.
+    for row in list(doc.get("accepted") or []):
+        holder = str(row.get("nick") or "")
+        if (
+            _norm_repo(str(row.get("repo") or "")) == repo
+            and tasks_equivalent(str(row.get("task") or ""), task_u)
+            and _norm_ident(str(row.get("id") or "")) == ident
+            and holder
+            and holder != nick_s
+            and _same_machine_nicks(holder, nick_s)
+        ):
+            row["nick"] = nick_s
+            row["channel"] = channel_s
+            row["accepted_ts"] = _utc_now()
+            if str(row.get("task") or "").upper() == "PR":
+                row["task"] = "FR"
+            # Drop departed holder from workers.
+            doc.setdefault("workers", {}).pop(holder, None)
+            _busy()
             save_queue(home, doc)
             return "accepted", row
 
@@ -482,29 +572,40 @@ def accept_job(
     for i, row in enumerate(list(doc["unaccepted"])):
         if (
             _norm_repo(str(row.get("repo") or "")) == repo
-            and str(row.get("task") or "").upper() == task_u
+            and tasks_equivalent(str(row.get("task") or ""), task_u)
             and _norm_ident(str(row.get("id") or "")) == ident
         ):
             match = doc["unaccepted"].pop(i)
             break
     if match is None:
+        _busy()
+        save_queue(home, doc)
+        key = f"{nick_s}|{repo}|{task_u}|{ident}|no_queue_row"
+        if key not in _ack_no_match_logged:
+            _ack_no_match_logged.add(key)
+            import logging
+
+            logging.getLogger("jeeves.queue").info(
+                "ack_no_match nick=%s repo=%s task=%s id=%s reason=no_queue_row",
+                nick_s,
+                repo,
+                task_u,
+                ident,
+            )
         return "no_match", None
 
     match["nick"] = nick_s
     match["channel"] = channel_s
     match["accepted_ts"] = _utc_now()
-    match["task"] = task_u
+    match["task"] = "FR" if tasks_equivalent(match.get("task"), "FR") or task_u == "FR" else task_u
+    if str(match.get("task") or "").upper() == "PR":
+        match["task"] = "FR"
     match["id"] = ident
     match["repo"] = repo
     doc["accepted"].append(match)
     if len(doc["accepted"]) > ACCEPTED_CAP:
         doc["accepted"] = doc["accepted"][-ACCEPTED_CAP:]
-    doc["workers"][nick_s] = {
-        "state": "busy",
-        "job": f"{repo} {task_u} {ident}",
-        "channel": channel_s,
-        "ts": _utc_now(),
-    }
+    _busy()
     save_queue(home, doc)
     return "accepted", match
 
@@ -527,7 +628,7 @@ def nack_job(
         if (
             str(row.get("nick") or "") == nick_s
             and _norm_repo(str(row.get("repo") or "")) == repo
-            and str(row.get("task") or "").upper() == task_u
+            and tasks_equivalent(str(row.get("task") or ""), task_u)
             and _norm_ident(str(row.get("id") or "")) == ident
         ):
             match = doc["accepted"].pop(i)
@@ -541,7 +642,7 @@ def nack_job(
     match["nack_ts"] = _utc_now()
     _remove_matching(
         doc["unaccepted"],
-        lambda r: _same(r, repo, task_u, ident),
+        lambda r: _same(r, repo, str(match.get("task") or task_u), ident),
     )
     doc["unaccepted"].append(match)
     doc["workers"][nick_s] = {"state": "idle", "ts": _utc_now()}
@@ -564,20 +665,23 @@ def accepted_rows(home: Path) -> list[dict]:
 def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result: str = "ok", url: str = "") -> tuple[str, dict | None]:
     """DONE path: accepted → done; worker idle; optional supersede hook point."""
     doc = load_queue(home)
-    ident = ident if ident.startswith("#") else f"#{ident}"
+    ident = _norm_ident(ident)
+    repo = _norm_repo(repo)
+    task_u = str(task or "").upper()
+    nick_s = str(nick or "").strip()
     match = None
     for i, row in enumerate(list(doc["accepted"])):
         if (
-            str(row.get("nick")) == nick
-            and str(row.get("repo")) == repo
-            and str(row.get("task")).upper() == task.upper()
-            and str(row.get("id")) == ident
+            str(row.get("nick") or "") == nick_s
+            and _norm_repo(str(row.get("repo") or "")) == repo
+            and tasks_equivalent(str(row.get("task") or ""), task_u)
+            and _norm_ident(str(row.get("id") or "")) == ident
         ):
             match = doc["accepted"].pop(i)
             break
     if match is None:
         # still allow DONE to clear busy if row missing
-        doc["workers"][nick] = {"state": "idle", "ts": _utc_now()}
+        doc["workers"][nick_s] = {"state": "idle", "ts": _utc_now()}
         save_queue(home, doc)
         return "no_match", None
     match["done_ts"] = _utc_now()
@@ -587,7 +691,7 @@ def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result
     doc["done"].append(match)
     if len(doc["done"]) > DONE_CAP:
         doc["done"] = doc["done"][-DONE_CAP:]
-    doc["workers"][nick] = {"state": "idle", "ts": _utc_now()}
+    doc["workers"][nick_s] = {"state": "idle", "ts": _utc_now()}
     save_queue(home, doc)
     return "done", match
 
@@ -605,3 +709,103 @@ def worker_state(home: Path, nick: str) -> str:
     w = doc.get("workers") or {}
     ent = w.get(nick) or {}
     return str(ent.get("state") or "idle")
+
+
+def _parse_worker_ts(raw: Any) -> float | None:
+    """Parse ISO ts or epoch float into epoch seconds."""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    try:
+        # 2026-09-25T18:44:47Z
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        from datetime import datetime
+
+        return datetime.fromisoformat(s).timestamp()
+    except ValueError:
+        return None
+
+
+def release_worker(
+    home: Path,
+    nick: str,
+    *,
+    reason: str = "stale",
+) -> list[dict[str, Any]]:
+    """FR #102: drop nick from workers; return its accepted rows to unaccepted."""
+    doc = load_queue(home)
+    nick_s = str(nick or "").strip()
+    if not nick_s:
+        return []
+    released: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    for row in list(doc.get("accepted") or []):
+        if str(row.get("nick") or "") == nick_s:
+            for k in ("nick", "channel", "accepted_ts"):
+                row.pop(k, None)
+            row["release_ts"] = _utc_now()
+            row["release_reason"] = reason
+            released.append(row)
+            doc.setdefault("unaccepted", []).append(row)
+        else:
+            kept.append(row)
+    doc["accepted"] = kept
+    doc.setdefault("workers", {}).pop(nick_s, None)
+    save_queue(home, doc)
+    return released
+
+
+def expire_stale_workers(
+    home: Path,
+    *,
+    idle_s: float | None = None,
+    max_age_s: float | None = None,
+    now: float | None = None,
+) -> list[str]:
+    """Remove workers whose ts is older than idle_s; release their accepted jobs.
+
+    ``max_age_s`` is an alias for ``idle_s`` (FR #102 tests / callers).
+    """
+    import os
+
+    ttl = idle_s if idle_s is not None else max_age_s
+    if ttl is None:
+        try:
+            ttl = float(os.environ.get("JEEVES_WORKER_STALE_S") or DEFAULT_STALE_WORKER_S)
+        except (TypeError, ValueError):
+            ttl = float(DEFAULT_STALE_WORKER_S)
+    doc = load_queue(home)
+    now_f = time.time() if now is None else float(now)
+    expired: list[str] = []
+    for nick, ent in list((doc.get("workers") or {}).items()):
+        if not isinstance(ent, dict):
+            expired.append(str(nick))
+            continue
+        ts = _parse_worker_ts(ent.get("ts"))
+        if ts is None or (now_f - ts) >= float(ttl):
+            expired.append(str(nick))
+    for nick in expired:
+        release_worker(home, nick, reason="stale")
+        # FR #79/#91: clear both digest views
+        try:
+            from .digest import load_digest, mirror_top_worker_to_machine, save_digest
+
+            dig = load_digest(home)
+            mirror_top_worker_to_machine(dig, nick, None, remove=True)
+            qw = dict((dig.get("queue") or {}).get("workers") or {})
+            qw.pop(nick, None)
+            dig.setdefault("queue", {})["workers"] = qw
+            dig["workers"] = dict(qw)
+            save_digest(home, dig)
+        except Exception:
+            pass
+    return expired
