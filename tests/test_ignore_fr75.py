@@ -243,3 +243,119 @@ def test_focus_layering_ignored_never_appears(tmp_path: Path):
     focused = sorted(rows, key=lambda r: 0 if "focus-me" in r["repo"] else 1)
     visible = filter_rows_not_ignored(home, focused)
     assert [r["repo"] for r in visible] == ["SimonBarnett/other"]
+
+
+def test_supersede_skipped_for_ignored_repo(tmp_path: Path):
+    """FR #75: ignored repos get no supersede — apply_queue_event returns ignored."""
+    home = tmp_path / "d"
+    # seed a FR that would normally be superseded by MRB
+    apply_queue_event(
+        home,
+        Claim(repo="SimonBarnett/noise", task="FR", id="#9", line="old"),
+    )
+    apply_queue_event(
+        home,
+        Claim(repo="SimonBarnett/keep", task="FR", id="#1", line="stay"),
+    )
+    # IRC path: !ignore must purge queued noise then block supersede
+    handle_ignore_add(home, "SimonBarnett/noise")
+    before = load_queue(home)
+    assert all(r.get("repo") != "SimonBarnett/noise" for r in before["unaccepted"])
+    keep_before = [r for r in before["unaccepted"] if r.get("repo") == "SimonBarnett/keep"]
+    assert len(keep_before) == 1
+    st = apply_queue_event(
+        home,
+        Claim(
+            repo="SimonBarnett/noise",
+            task="MRB",
+            id="#99",
+            line="pr",
+            pr_id="#99",
+            refs=("#9",),
+        ),
+    )
+    assert st == "ignored"
+    after = load_queue(home)
+    assert all(r.get("repo") != "SimonBarnett/noise" for r in after["unaccepted"])
+    keep_after = [r for r in after["unaccepted"] if r.get("repo") == "SimonBarnett/keep"]
+    assert keep_after == keep_before
+
+
+def test_purge_clears_accepted_and_done(tmp_path: Path):
+    home = tmp_path / "d"
+    save_queue(
+        home,
+        {
+            "v": 1,
+            "unaccepted": [
+                {"repo": "o/dead", "task": "FR", "id": "#1", "line": "u", "seq": 1}
+            ],
+            "accepted": [
+                {"repo": "o/dead", "task": "FR", "id": "#2", "line": "a", "seq": 2}
+            ],
+            "done": [
+                {"repo": "o/dead", "task": "FR", "id": "#3", "line": "d", "seq": 3}
+            ],
+            "workers": {},
+        },
+    )
+    n = purge_repo_from_queue(home, "dead")
+    assert n == 3
+    q = load_queue(home)
+    assert q["unaccepted"] == []
+    assert q["accepted"] == []
+    assert q["done"] == []
+
+
+def test_resync_skips_ignored_repos(tmp_path: Path):
+    """FR #75 / #49: resync must not re-enqueue ignored repos from GitHub."""
+    from jeeves.resync import ResyncConfig, build_outstanding
+
+    home = tmp_path / "d"
+    add_ignore(home, "SimonBarnett/skip-me")
+
+    class _Client:
+        def list_repos(self):
+            return ["SimonBarnett/skip-me", "SimonBarnett/keep-me"]
+
+        def list_open_issues(self, repo):
+            return [
+                {
+                    "number": 1,
+                    "title": f"issue-{repo}",
+                    "html_url": f"https://github.com/{repo}/issues/1",
+                    "created_at": "2026-01-01T00:00:00Z",
+                }
+            ]
+
+        def list_open_pulls(self, repo):
+            return []
+
+        def list_recent_closed_pulls(self, repo):
+            return []
+
+    rows = build_outstanding(_Client(), cfg=ResyncConfig(), home=home)
+    repos = {str(r.get("repo")) for r in rows}
+    assert "SimonBarnett/skip-me" not in repos
+    assert "SimonBarnett/keep-me" in repos
+
+
+def test_bare_ignore_and_unignore_usage(tmp_path: Path):
+    home = tmp_path / "d"
+    assert handle_ignore_add(home, "") == [
+        "ignore: bad repo (use name or owner/name)"
+    ]
+    assert handle_unignore(home, "never-there")[0].startswith("unignore:")
+    assert "was not ignored" in handle_unignore(home, "never-there")[0]
+
+
+def test_ignored_json_persists_across_reload(tmp_path: Path):
+    home = tmp_path / "d"
+    add_ignore(home, "Owner/One")
+    add_ignore(home, "Two")
+    doc = load_ignored(home)
+    assert any(r.lower() == "owner/one" for r in doc["repos"])
+    assert any(r.lower() == "two" for r in doc["repos"])
+    # fresh load from disk
+    assert is_ignored(home, "owner/one")
+    assert is_ignored(home, "Someone/Two")
