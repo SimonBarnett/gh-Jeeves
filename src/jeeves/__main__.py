@@ -29,7 +29,7 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--nick", default=os.environ.get("AGENTIC_IRC_CHAIR_NICK") or "Jeeves")
     p.add_argument("--host", default=os.environ.get("AGENTIC_IRC_HOST") or "127.0.0.1")
     p.add_argument("--port", type=int, default=int(os.environ.get("AGENTIC_IRC_PORT") or "0"))
-    p.add_argument("--tls", action="store_true", help="TLS to Ergo (native client, FR #46)")
+    p.add_argument("--tls", action="store_true", help="TLS to Ergo (production)")
     p.add_argument(
         "--tls-insecure",
         action="store_true",
@@ -85,7 +85,17 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--password", default=os.environ.get("AGENTIC_IRC_PASSWORD") or "")
     p.add_argument("--no-singleton", action="store_true")
-    p.add_argument("--resync-interval", type=float, default=15 * 60)
+    p.add_argument(
+        "--resync-interval",
+        type=float,
+        default=float(os.environ.get("JEEVES_RESYNC_INTERVAL") or 15 * 60),
+        help="GitHub resync period seconds (default 900). FR #49 wires this.",
+    )
+    p.add_argument(
+        "--no-resync",
+        action="store_true",
+        help="Disable GitHub resync (same as JEEVES_RESYNC_DISABLE=1)",
+    )
     return p.parse_args(argv)
 
 
@@ -107,12 +117,10 @@ def dry_run_plan(args: argparse.Namespace) -> dict:
         "receiver": f"{args.receiver_bind}:{args.receiver_port}",
         "shops": [s.strip() for s in args.shops.split(",") if s.strip()],
         "resync_interval_s": args.resync_interval,
+        "resync_on_start": not bool(getattr(args, "no_resync", False)),
         "never_touch": ["Ergo", "BobIrcd", "ircd.yaml"],
         "queue_path": str(dh / "queue.json"),
         "entry": "python -m jeeves",
-        "irc_client": "jeeves.tls_irc.TlsIrcClient" if args.tls else "jeeves.local_ircd.IrcClient",
-        "native_tls": True,
-        "no_agentic_irc_bridge": True,
         "version": ver.get("version"),
         "jeeves_version": ver.get("jeeves_version"),
         "version_drift": ver.get("version_drift"),
@@ -208,37 +216,60 @@ def main(argv: list[str] | None = None) -> int:
                 receiver.stop()
             return 2
 
-        # Resync scheduler (15 min default) — webhook events still apply concurrently via receiver
-        sched = None
-        try:
-            from .resync import FakeGitHub, reconcile_queue  # noqa: F401
+        # FR #49: wire ResyncScheduler on start so !list is populated
+        from .resync import ResyncConfigError, build_resync_scheduler, resync_disabled
 
-            # Without GitHub token, skip live resync client (still startable)
-            if (os.environ.get("GITHUB_TOKEN") or "").strip():
-                # production resync would use LiveGitHub — optional
-                pass
-        except Exception:
-            pass
+        if args.no_resync:
+            os.environ["JEEVES_RESYNC_DISABLE"] = "1"
+
+        sched = None
+        if not resync_disabled():
+            try:
+                sched = build_resync_scheduler(
+                    chair_queue_home,
+                    interval_s=float(args.resync_interval),
+                    require_token=True,
+                    jeeves_home=jh,
+                )
+            except ResyncConfigError as exc:
+                print(f"ERROR resync config: {exc}", flush=True)
+                if receiver:
+                    receiver.stop()
+                return 2
 
         # For unit/service smoke without IRC, allow JEEVES_CHAIR_NO_IRC=1
         if os.environ.get("JEEVES_CHAIR_NO_IRC") == "1":
             print("INFO chair no-irc smoke mode digest_home=" + str(dh), flush=True)
+            if sched is not None:
+                # still run start resync so queue is warm before IRC-less hold
+                sched.start(run_immediately=True)
+                print(
+                    f"INFO resync-on-start runs={sched.runs} interval_s={args.resync_interval}",
+                    flush=True,
+                )
             try:
                 while True:
                     time.sleep(3600)
             except KeyboardInterrupt:
+                if sched is not None:
+                    sched.stop()
                 pass
         else:
-            # FR #46: native TLS client (no agentic_irc irc_agent bridge)
+            # Prefer native TLS when --tls (if tls_irc present); else plain client
             client = None
             if args.tls:
-                if port <= 0:
-                    port = int(os.environ.get("AGENTIC_IRC_PORT") or "6697")
-                if host in ("127.0.0.1", "0.0.0.0", "") and not os.environ.get("AGENTIC_IRC_HOST"):
-                    host = os.environ.get("AGENTIC_IRC_HOST") or "irc.ntsa.uk"
-                from .tls_irc import TlsIrcClient
+                try:
+                    from .tls_irc import TlsIrcClient
 
-                client = TlsIrcClient(
+                    if port <= 0:
+                        port = int(os.environ.get("AGENTIC_IRC_PORT") or "6697")
+                    if not os.environ.get("AGENTIC_IRC_HOST") and host in (
+                        "127.0.0.1",
+                        "0.0.0.0",
+                        "",
+                    ):
+                        host = "irc.ntsa.uk"
+                    client = TlsIrcClient(
                     host,
                     port,
                     args.nick,
@@ -250,24 +281,38 @@ def main(argv: list[str] | None = None) -> int:
                     sasl_user=args.sasl_user or "",
                     sasl_password=args.sasl_password or "",
                 )
-                print(
-                    f"INFO FR #46 native TLS IRC client host={host}:{port} "
-                    f"insecure={bool(args.tls_insecure)} digest_home={dh}",
-                    flush=True,
-                )
-            chair = JeevesChair(
-                host,
-                port,
-                chair_queue_home,
-                report_base,
+                    print(f"INFO native TLS IRC client host={host}:{port}", flush=True)
+                except ImportError:
+                    print(
+                        "ERROR --tls requires jeeves.tls_irc (FR #46); plain mode without --tls",
+                        flush=True,
+                    )
+                    if receiver:
+                        receiver.stop()
+                    if sched is not None:
+                        sched.stop()
+                    return 2
+            chair_kwargs = dict(
+                host=host,
+                port=port,
+                home=chair_queue_home,
+                report_url=report_base,
                 nick=args.nick,
                 shops=shops,
-                client=client,
+                resync_scheduler=sched,
             )
+            # optional client= only if JeevesChair supports it
+            import inspect
+
+            from .roles import JeevesChair as _JC
+
+            if client is not None and "client" in inspect.signature(_JC.__init__).parameters:
+                chair_kwargs["client"] = client
+            chair = _JC(**chair_kwargs)
             chair.start()
             print(
-                f"INFO chair nick={args.nick} host={host}:{port} tls={bool(args.tls)} "
-                f"shops={shops} digest={dh}",
+                f"INFO chair nick={args.nick} host={host}:{port} shops={shops} digest={dh} "
+                f"resync={'on' if sched else 'off'} interval_s={args.resync_interval}",
                 flush=True,
             )
             try:

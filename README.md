@@ -16,6 +16,8 @@ With every LLM/token pool disabled, this chain must complete with **scripts only
 6. Worker does the task (only step where AI is allowed)  
 7. Worker `DONE` → Jeeves marks done + idle + supersede  
 
+**Resync:** on service start (FR #49) loads \queue.json\ then GitHub resync so \!list\ is full; every 15m thereafter. Token from env/file, never logged.
+
 **G1** (CI, every PR): local test ircd E2E with no-LLM guard (plain + **TLS path**, FR #46). **G2** (after deploy): live smoke including native TLS to Ergo. A release is not shippable without both. Full definition: `docs/brief/JEEVES_BRIEF.md` §0.
 
 **IRC client:** gh-Jeeves owns a **native TLS IRC client** (`jeeves.tls_irc`) for the chair. It does **not** import or spawn `agentic_irc` `irc_agent --chair`. Production: `python -m jeeves chair --tls --host irc.ntsa.uk --port 6697`.

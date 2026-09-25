@@ -7,6 +7,7 @@ queue.json, keep live accepted workers, quiet when unchanged.
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -547,6 +548,118 @@ class ResyncScheduler:
                 self.run_once()
             except Exception:
                 continue
+
+
+class ResyncConfigError(RuntimeError):
+    """Missing credential or invalid resync configuration (FR #49)."""
+
+
+def resync_disabled() -> bool:
+    """True when operator opts out (tests / offline)."""
+    v = (os.environ.get("JEEVES_RESYNC_DISABLE") or "").strip().lower()
+    return v in ("1", "true", "yes", "off")
+
+
+def load_github_token(*, env: dict | None = None, homes: list[Path] | None = None) -> str | None:
+    """
+    Read GitHub token for resync. Never log the value.
+
+    Order: GITHUB_TOKEN, JEEVES_GITHUB_TOKEN, then first existing file among
+    JEEVES_GITHUB_TOKEN_FILE, ~/.grok/github.token, {jeeves_home}/github.token,
+    {digest_home}/github.token.
+    """
+    e = env if env is not None else os.environ
+    for key in ("GITHUB_TOKEN", "JEEVES_GITHUB_TOKEN"):
+        raw = (e.get(key) or "").strip()
+        if raw:
+            return raw
+    paths: list[Path] = []
+    file_env = (e.get("JEEVES_GITHUB_TOKEN_FILE") or "").strip()
+    if file_env:
+        paths.append(Path(file_env).expanduser())
+    paths.append(Path.home() / ".grok" / "github.token")
+    for h in homes or []:
+        if h:
+            paths.append(Path(h).expanduser() / "github.token")
+    for p in paths:
+        try:
+            if p.is_file():
+                tok = p.read_text(encoding="utf-8").strip().splitlines()[0].strip()
+                if tok:
+                    return tok
+        except OSError:
+            continue
+    return None
+
+
+def build_resync_scheduler(
+    home: Path,
+    *,
+    interval_s: float = 15 * 60,
+    client: GitHubClient | None = None,
+    require_token: bool = True,
+    owners: list[str] | None = None,
+    allow_repos: list[str] | None = None,
+    github_api: str | None = None,
+    jeeves_home: Path | None = None,
+    outbox_append: Callable[[str], None] | None = None,
+    connected_nicks_fn: Callable[[], set[str]] | None = None,
+) -> ResyncScheduler | None:
+    """
+    Wire resync for the Windows service (FR #49).
+
+    Returns None only when ``JEEVES_RESYNC_DISABLE`` is set.
+    Raises ``ResyncConfigError`` if resync is enabled and no token/client.
+    Loads existing queue.json implicitly via run_resync (never wipes on GitHub down).
+    """
+    if resync_disabled():
+        return None
+    home = Path(home)
+    home.mkdir(parents=True, exist_ok=True)
+    # Ensure queue.json exists so start never invents empty from missing file alone
+    if not (home / "queue.json").is_file():
+        from .queue import empty_queue, save_queue
+
+        save_queue(home, empty_queue())
+
+    cfg = ResyncConfig(
+        owners=list(owners or ["SimonBarnett"]),
+        allow_repos=list(allow_repos or []),
+        interval_s=float(interval_s),
+        github_api=github_api or "https://api.github.com",
+        token=None,
+    )
+    gh: GitHubClient
+    if client is not None:
+        gh = client
+    else:
+        token = load_github_token(homes=[jeeves_home, home] if jeeves_home else [home])
+        if not token:
+            if require_token:
+                raise ResyncConfigError(
+                    "resync enabled but no GitHub token: set GITHUB_TOKEN or "
+                    "JEEVES_GITHUB_TOKEN (or token file); or JEEVES_RESYNC_DISABLE=1"
+                )
+            return None
+        cfg.token = token  # never print
+        gh = LiveGitHubClient(cfg)
+
+    def _append(line: str) -> None:
+        if outbox_append:
+            outbox_append(line)
+            return
+        # default: chair-outbox for #bobiverse quiet summary when not quiet
+        path = home / "chair-outbox.txt"
+        with path.open("a", encoding="utf-8") as f:
+            f.write(f"PRIVMSG #bobiverse :{line}\n")
+
+    return ResyncScheduler(
+        home,
+        gh,
+        cfg=cfg,
+        connected_nicks_fn=connected_nicks_fn,
+        outbox_append=_append,
+    )
 
 
 # --- optional thin live client (tests mock; production uses token from secure store) ---
