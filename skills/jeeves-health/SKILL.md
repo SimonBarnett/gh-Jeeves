@@ -1,65 +1,50 @@
 ---
 name: jeeves-health
 description: >
-  Check BobJeeves service, IRC reachability (report-only), webhook lastSeen,
-  version drift, and throttle backoff. Use when Jeeves down, IRC unreachable,
-  BobIrcd Stopped while ergo runs, TipForm offline, or /jeeves-health.
+  Use this when Jeeves may be down or unhealthy: missing from #bobiverse or a
+  #{machine} shop, GIT announces stopped, stale lastSeen on the digest webhook,
+  TipForm shows Jeeves offline, version drift, reconnect throttling, or
+  /jeeves-health.
 ---
 
 # jeeves-health
 
-## Purpose
-
-Diagnose whether Jeeves can work: IRC TCP/TLS reachability, optional service
-status (BobJeeves / BobIrcd), digest path. **Report only** for Ergo/BobIrcd
-(K7 / FR #8) — never start/stop/edit BobIrcd or `ircd.yaml`. Raise Ergo issues
-in **agentic_build #327** for Simon.
+Seed FR: #18.
 
 Agentic control is an overlay: the token-less path must never depend on this skill.
 
-## Commands
+## Checks
 
-```bash
-# from gh-Jeeves checkout
-PYTHONPATH=src python -m jeeves.health --json --host irc.ntsa.uk --port 6697
-PYTHONPATH=src python -m jeeves health --json   # via package __main__ if wired
+```mermaid
+flowchart TD
+  S[Service BobJeeves running?] -->|no| F1[jeeves-install-service]
+  S -->|yes| P[Nick Jeeves in #bobiverse and every #machine?]
+  P -->|no| F2[check ircd + throttle backoff]
+  P -->|yes| L[lastSeen fresh on digest?]
+  L -->|no| F3[check webhook writer]
+  L -->|yes| V[running version = latest release?]
+  V -->|no| F4[jeeves-release]
 ```
 
-PowerShell (read-only service query is inside the module on Windows):
+*Caption: work top-down; the first failing check tells you which skill to run next.*
 
-```powershell
-$env:PYTHONPATH = '<repo>\src'
-python -m jeeves.health --json --host irc.ntsa.uk --port 6697
-```
+1. **Service:** `BobJeeves` is Running (single instance). A legacy chair
+   scheduled task must not also be running.
+2. **Presence:** nick `Jeeves` is in `#bobiverse` (op) and silently in every
+   `#{machine}` listed in the fleet registry.
+3. **Digest:** `GET https://{bob-host}/bob/v1/report` ÔÇö Jeeves `lastSeen` is fresh.
+4. **Version drift:** the version Jeeves reports equals the latest gh-Jeeves release tag.
+5. **Throttle:** on "too many connections", Jeeves must back off exponentially
+   and stay singleton ÔÇö kill duplicates, don't reconnect-loop.
 
-Exit code `0` = IRC reachable; `1` = IRC down / degraded for chair path.
+## Ops expectations
 
-## What it checks
+- Jeeves is op in `#bobiverse`; each bob-{machine} is op in its own `#{machine}`.
+  Durable ops need ircd channel registration (owned outside this repo).
+- Owner ops only from a fleet machine's own client certificate ÔÇö masked hosts
+  are shared per public IP, so never identify a machine by host.
+- A bob-{machine} may kick invalid workers from its own shop only; never
+  Jeeves or another bob.
+- If the ircd itself is down, **report it**; gh-Jeeves never touches Ergo/BobIrcd.
 
-| Check | Meaning |
-|--------|---------|
-| IRC TCP/(TLS) connect | Server listening — **detects IRC down** |
-| `BobIrcd` status (optional) | running/stopped/missing — **report only** |
-| `BobJeeves` status (optional) | service for chair process |
-| `raise_for` | always points Ergo/BobIrcd remediations to agentic_build / Simon |
-
-## Forbidden (CAST IRON)
-
-- `sc start/stop/create/delete BobIrcd`
-- `Install-BobIrcd.ps1`, edit `ircd.yaml`
-- `nssm install/start/stop BobIrcd`
-- Any “heal” that restarts Ergo from this skill
-
-## K7 known drift
-
-**BobIrcd shows Stopped while `ergo.exe` still runs** outside the service.
-Health must **note** Stopped + IRC up/down separately and **raise** agentic_build
-#327 — not “fix” BobIrcd from gh-Jeeves.
-
-## Tests
-
-```bash
-pytest -q tests/cast_iron/test_k7_health_irc_down.py
-```
-
-Code: `src/jeeves/health.py`.
+Related: `jeeves-install-service`, `jeeves-announce-debug`, `jeeves-release`.

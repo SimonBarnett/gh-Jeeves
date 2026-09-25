@@ -1,43 +1,45 @@
 ---
 name: jeeves-announce-debug
 description: >
-  Debug a GitHub delivery that was not announced: hook deliveries, receiver
-  secret-field filter, chair-outbox, Ergo 417 long lines. Use when GIT line
-  missing on #bobiverse, ping ok but issues silent, or /jeeves-announce-debug.
+  Use this when a GitHub event was not announced on #bobiverse: GIT line
+  missing, ping OK but issues silent, chair outbox piling up, announce cut off
+  or rejected as too long (417), or /jeeves-announce-debug.
 ---
 
 # jeeves-announce-debug
 
-## Purpose
-
-Trace GitHub → receiver → outbox → Jeeves → `#bobiverse` when a delivery is
-missing. Covers hook deliveries, secret-field filter (agentic_irc #206),
-chair-outbox drain, and 417 line splits (#205).
+Seed FR: #20. Related: length-safe lines #24, agentic_irc #205/#206.
 
 Agentic control is an overlay: the token-less path must never depend on this skill.
 
-## FR #24 — length-safe announcements
+## Trace the path
 
-Machine-read lines use `src/gh_jeeves/announce.py`:
+```mermaid
+flowchart LR
+  GH[GitHub hook delivery] --> RX[receiver /bob/v1/git]
+  RX --> F{secret filter + format}
+  F -->|ok| Q[queue update]
+  F -->|ok| OB[chair outbox line]
+  OB --> J[Jeeves]
+  J --> BV["#bobiverse GIT line"]
+```
 
-- Vital fields first (event, task FR/MRB/UAT, `owner/repo#n`, action, URL,
-  `fixes:…`, `head:…`); title last; only the title is truncated (`...`).
-- Budget by UTF-8 **bytes** vs IRC 512 including `:nick!user@host PRIVMSG #chan :`
-  and CRLF (`text_budget` / `wire_line_bytes`). Never cut mid-codepoint.
-- Compact fallback when vitals alone overflow; never a parser-required
-  continuation line.
-- Pre-send: `validate_before_send` / `prepare_send` round-trip with `parse_announce`.
-  Failures log ERROR; queue still written from webhook vitals (`MemoryQueue` /
-  `QueueEvent`) — queue never depends on IRC text.
-- Simulated 417: `simulate_417` logs preview; queue item remains.
-- Tests (token-less, gate surface): `pytest tests/test_announce_length_fr24.py`
+*Caption: find the first hop where the event disappears.*
 
-## Checklist (delivery missing)
+1. **Hook delivery:** repo Settings ÔåÆ Webhooks ÔåÆ Recent deliveries. The hook
+   posts `issues`, `pull_request`, `push` as JSON to `https://{bob-host}/bob/v1/git`.
+   Redeliver if it failed.
+2. **Receiver / secret filter:** the filter must scan only the emitted fields,
+   not the whole payload; otherwise issues that merely *discuss* secrets are
+   dropped (#206).
+3. **Queue:** the item should be in the webhook queue even if IRC failed ÔÇö the
+   queue never depends on IRC text.
+4. **Chair outbox piling up:** Jeeves not connected or not draining ÔÇö run
+   `jeeves-health`.
+5. **Too long (417):** vital fields first (event, type, `owner/repo#n`, action,
+   URL), title last and the only part truncated; byte budget, UTF-8 safe; never
+   a continuation line a parser needs (#24).
 
-1. GitHub hook delivery → 2xx on `/bob/v1/git`?
-2. Secret-field filter (K14 / agentic_irc #206) — scan emitted fields only.
-3. `prepare_send` body under budget (`wire_line_bytes(line) <= 512`).
-4. Ergo 417 → log `ERROR 417`; queue event still present.
-5. Never continue a vital field onto a second IRC line.
+Jeeves announces **only** on `#bobiverse` ÔÇö a missing GIT line in a shop is expected.
 
-Do **not** restart live ionos / Ergo / Jeeves from implementer seats unless assigned.
+Related: `jeeves-health`, `jeeves-queue`.

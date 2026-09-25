@@ -1,52 +1,49 @@
 ---
 name: jeeves-token-less-gate
 description: >
-  Run the section 0 token-less end-to-end gate: G1 local test ircd with no-LLM
-  guard, and G2 live smoke after deploy. Use when proving the acceptance gate,
-  before a release, or /jeeves-token-less-gate.
+  Use this when proving the token-less acceptance gate (GitHub event through
+  to workers with no AI tokens): running G1 before a merge or release, running
+  G2 after deploy, checking a change doesn't add an LLM dependency, or
+  /jeeves-token-less-gate.
 ---
 
 # jeeves-token-less-gate
 
-## Purpose
-
-Execute and record the KEY success metric: GIT announce through to workers
-**without tokens**. G1 is CI-required; G2 is manual post-deploy
-(`docs/migration-plan.md` section 16.3).
+Seed FR: #23. Headline gate: #1.
 
 Agentic control is an overlay: running this skill helps operators; the gate
-itself is script-only and must never require an LLM.
+itself is script-only and must never require an LLM or a skill.
+
+## The chain (no AI tokens anywhere except the worker's own task)
+
+```mermaid
+flowchart LR
+  E[GitHub event] --> J[Jeeves announce on #bobiverse + queue]
+  J --> B["worker !bored in #machine"]
+  B --> O[ear offer]
+  O --> A[ACK ÔåÆ accepted + busy]
+  A --> W[worker task: only AI step]
+  W --> D[DONE ÔåÆ done + idle + supersede]
+```
+
+*Caption: every box is a script except the worker's own work between ACK and DONE.*
+
+Works during a token outage: webhook queue + mandatory `!bored` + addressed
+offer + ACK needs no Bob reasoning.
 
 ## G1 (CI, every PR)
 
-```bash
-pip install -e ".[dev]"
-pytest -q tests/
-```
+Local test ircd on loopback, stub receiver, scripted fake worker, no-LLM
+process guard; queue and webhook snapshots must match. Never live IRC.
+Tests live under `tests/g1_token_less_e2e/` (#1).
 
-Includes:
+## G2 (manual, after deploy)
 
-- `tests/g1_token_less_e2e` — local test ircd + stub receiver + scripted worker
-- `tests/test_announce_length_fr24.py` — FR #24 length-safe announce (gate-blocking)
-
-Pass criteria:
-
-- Chain: GitHub event to GIT on #bobiverse to queue FR to !bored to ear OFFER to ACK to DONE
-- Jeeves never handles !bored / never offers
-- Worker nick {machine}-{pid} accepted
-- Announce lines vital-first, byte-budgeted (FR #24); queue from webhook not IRC
-- No-LLM guard: AI env scrubbed; non-loopback TCP blocked
-- Never live IRC / ionos / Ergo
-
-## G2 (manual after deploy)
-
-Follow `docs/migration-plan.md` section 16.3 and `docs/g2-live-smoke-checklist.md`
-(including the **TLS IRC FR #46** line: native `python -m jeeves --tls`, not
-`agentic_irc` `irc_agent --chair`). Record in release notes. Do not stamp UAT
-from this skill.
-
-## G1 TLS path (FR #46)
-
-```text
-pytest -q tests/g1_token_less_e2e/test_g1_tls_path.py
-```
+1. Digest shows Jeeves `lastSeen` fresh; test ear and worker have no token pools.
+2. Open issue "smoke <timestamp>" on a sandbox repo ÔåÆ GIT line on `#bobiverse`, FR in `queue.unaccepted`.
+3. Worker `!bored` ÔåÆ ear `OFFER FR <repo>#n` to that nick.
+4. `ACK FR <repo>#n` ÔåÆ accepted, worker busy with activity.
+5. PR with `Closes #n` ÔåÆ FR replaced by MRB.
+6. `DONE FR <repo>#n PR <url>` ÔåÆ worker idle, row done.
+7. Close PR unmerged ÔåÆ FR restored; close issue ÔåÆ removed.
+8. Record in the release notes (`jeeves-release`).

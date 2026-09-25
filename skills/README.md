@@ -2,17 +2,20 @@
 
 Agent-controllable surface for operating, diagnosing, and changing Jeeves.
 
-**Agentic control is an overlay.** The section 0 token-less path (GitHub → announce → queue → !bored → offer → ACK → DONE → supersede) must **never** depend on a skill or an LLM. Skills help humans and agents; scripts own the gate.
+**Agentic control is an overlay.** The section 0 token-less path (GitHub ÔåÆ announce ÔåÆ queue ÔåÆ !bored ÔåÆ offer ÔåÆ ACK ÔåÆ DONE ÔåÆ supersede) must **never** depend on a skill or an LLM. Skills help humans and agents; scripts own the gate (#1).
 
-| Skill | Purpose |
-|-------|---------|
-| [harvest](harvest/SKILL.md) | Honesty box: always PR learnings back to this repo; also harvest into Jeeves from fleet books |
-| [jeeves-install-service](jeeves-install-service/SKILL.md) | Install / repair / upgrade `BobJeeves` (never Ergo) |
-| [jeeves-health](jeeves-health/SKILL.md) | Service, IRC presence, lastSeen, version drift, throttle |
-| [jeeves-queue](jeeves-queue/SKILL.md) | Read / explain / resync / repair queue; dry-run first |
-| [jeeves-announce-debug](jeeves-announce-debug/SKILL.md) | Hook delivery not announced |
-| [jeeves-worker-state](jeeves-worker-state/SKILL.md) | ACK/DONE, busy/idle, stuck accepted |
-| [jeeves-release](jeeves-release/SKILL.md) | Tag, deploy, roll back |
-| [jeeves-token-less-gate](jeeves-token-less-gate/SKILL.md) | Run G1 local E2E and G2 live smoke |
+| Skill | Purpose | Seed / refs |
+|-------|---------|-------------|
+| [harvest](harvest/SKILL.md) | Honesty box: report back via `gh` PR/issue ÔåÆ `/bob/v1/intake` ÔåÆ `harvest-outbox/` | #26 |
+| [jeeves-install-service](jeeves-install-service/SKILL.md) | Install / repair / upgrade `BobJeeves` (never Ergo) | #17 |
+| [jeeves-health](jeeves-health/SKILL.md) | Service, IRC presence, lastSeen, version drift, throttle, ops | #18 |
+| [jeeves-queue](jeeves-queue/SKILL.md) | Queue, supersede rules, `!list`, `!help`, resync; dry-run first | #19, #25, #27 |
+| [jeeves-announce-debug](jeeves-announce-debug/SKILL.md) | Hook delivery not announced; 417 / length-safe lines | #20, #24 |
+| [jeeves-worker-state](jeeves-worker-state/SKILL.md) | ACK/DONE ÔåÆ accepted/busy/activity, done/idle; stuck accepted | #21 |
+| [jeeves-release](jeeves-release/SKILL.md) | Tag, deploy, G2, roll back | #22 |
+| [jeeves-token-less-gate](jeeves-token-less-gate/SKILL.md) | Run G1 local E2E and G2 live smoke | #23, #1 |
+| [jeeves-shop-protocol](jeeves-shop-protocol/SKILL.md) | `#{machine}` wire contract: `!bored` ÔåÆ ear offer ÔåÆ ACK ÔåÆ DONE; what Jeeves records | #1 |
+| [jeeves-task-modes](jeeves-task-modes/SKILL.md) | FR / MRB / UAT contract; MRB tests-first, docs PR on PASS, fix PR on FAIL | #1 |
+| [jeeves-irc-roles](jeeves-irc-roles/SKILL.md) | Nicks, channels, secrets and token-free listening | ÔÇö |
 
-Foundation twin: `.grok/skills/harvest-agent-skills` → `skills/harvest`.
+Foundation twin: `.grok/skills/harvest-agent-skills` ÔåÆ `skills/harvest`.

@@ -12,7 +12,7 @@ description: >
 
 Idempotent **plan / install / repair** of **BobJeeves**.
 
-### Topology (FR #48) — one documented shape
+### Topology (FR #48) ÔÇö one documented shape
 
 | Service | Role |
 |---------|------|
@@ -26,11 +26,11 @@ Optional legacy **BobReport** (`Install-BobReport.ps1`) is only for a split depl
 
 ## Config
 
-Copy `config/bobjeeves.example.json` → `config/bobjeeves.json` (or
+Copy `config/bobjeeves.example.json` ÔåÆ `config/bobjeeves.json` (or
 `%USERPROFILE%\.agentic-irc-jeeves\bobjeeves.json`) and fill:
 
 - `irc_host` / `irc_port` / `tls`
-- `nick`, `sasl_user`, `sasl_password_file` (path only — secret never in cmdline)
+- `nick`, `sasl_user`, `sasl_password_file` (path only ÔÇö secret never in cmdline)
 - `receiver_port` (default **19781**)
 - `jeeves_home` / `digest_home` (must differ)
 
@@ -42,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobJeeves.ps1 
 
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\Start-BobJeeves.ps1 -DryRun -Production
 
-# Apply (operators only, elevated) — never from FR workers
+# Apply (operators only, elevated) ÔÇö never from FR workers
 # powershell -File tools\Install-BobJeeves.ps1 -Apply -Production -Json
 ```
 
@@ -52,9 +52,9 @@ Exit codes: `0` ok, `2` validation errors.
 
 1. DryRun: confirm `service_cmdline` has host, port, `--tls`, receiver **19781**, `no_bobircd_dependency`.
 2. Elevated `-Apply -Production`.
-3. `Get-Service BobJeeves` — starting it must **not** start BobIrcd.
+3. `Get-Service BobJeeves` ÔÇö starting it must **not** start BobIrcd.
 4. Disable task `BobJeeves-chair` after healthy.
-5. IIS proxies `https://irc.ntsa.uk/bob/v1/*` → `127.0.0.1:19781`.
+5. IIS proxies `https://irc.ntsa.uk/bob/v1/*` ÔåÆ `127.0.0.1:19781`.
 6. **Outbox pos (FR #71 / cutover):** digest home may still have agentic_irc `chair-outbox.txt.pos`. gh-Jeeves writes `chair-outbox.pos`. First start **migrates** the legacy file; if neither exists and the outbox is non-empty, start is **EOF** (no replay flood to `#bobiverse`). Do not pass `--replay-outbox` on production cutover unless operators intentionally want a full re-announce. See `docs/receiver-bobcallback-cutover.md`.
 
 ## Forbidden

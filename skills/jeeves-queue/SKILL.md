@@ -20,3 +20,8 @@ announce, queue, `!list`, and ear offers. Purge on ignore; unignore is new
 events only. Dry-run before hand-editing `ignored.json`.
 
 Agentic control is an overlay: the token-less path must never depend on this skill.
+
+## Related
+
+- [jeeves-shop-protocol](../jeeves-shop-protocol/SKILL.md) — wire contract for !bored/offer/ACK/DONE
+- [jeeves-task-modes](../jeeves-task-modes/SKILL.md) — FR/MRB/UAT
