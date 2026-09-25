@@ -1,4 +1,4 @@
-﻿---
+---
 name: jeeves-irc-roles
 description: >
   Use this when connecting an agent, worker or bob to the fleet IRC and you
@@ -20,7 +20,7 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 |------|------|----------|
 | Chair | `Jeeves` | `#bobiverse` (op) + every `#{machine}` (silent) |
 | Machine ear | `bob-{machine}` | own `#{machine}` (op) + `#bobiverse` |
-| Worker seat | `{machine}-<pid>` | own `#{machine}` **only** ÔÇö never `#bobiverse` |
+| Worker seat | `{machine}-<pid>` | own `#{machine}` **only** — never `#bobiverse` |
 | Named agent | its own name | as configured; its own state home |
 
 ```mermaid
@@ -38,7 +38,7 @@ flowchart LR
 
 - One state home per nick; never share a bob's home with an agent.
 - The connect password comes from an env var or a local secret file outside
-  git ÔÇö never commit, print or paste it.
+  git — never commit, print or paste it.
 - Join channels via the client's channel list on (re)connect, not via queued
   raw JOIN lines.
 - Listen with a script that writes incoming lines to a log, so no agent tokens
