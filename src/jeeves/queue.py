@@ -280,36 +280,150 @@ def format_offer(nick: str, row: dict) -> str:
     return f"{nick}: OFFER {task} {repo}{ident} {url}"
 
 
-def accept_job(home: Path, nick: str, channel: str, task: str, repo: str, ident: str) -> tuple[str, dict | None]:
-    """ACK path: move matching unaccepted → accepted; mark worker busy."""
+def _norm_ident(ident: str) -> str:
+    s = str(ident or "").strip()
+    if not s:
+        return ""
+    return s if s.startswith("#") else f"#{s}"
+
+
+def _norm_repo(repo: str) -> str:
+    return str(repo or "").strip()
+
+
+def find_unaccepted(doc: dict, task: str, repo: str, ident: str) -> dict | None:
+    """Locate unaccepted row (case-insensitive task; #n normalized)."""
+    ident = _norm_ident(ident)
+    repo = _norm_repo(repo)
+    task_u = str(task or "").upper()
+    for row in doc.get("unaccepted") or []:
+        if (
+            _norm_repo(str(row.get("repo") or "")) == repo
+            and str(row.get("task") or "").upper() == task_u
+            and _norm_ident(str(row.get("id") or "")) == ident
+        ):
+            return row
+    return None
+
+
+def accept_job(
+    home: Path,
+    nick: str,
+    channel: str,
+    task: str,
+    repo: str,
+    ident: str,
+) -> tuple[str, dict | None]:
+    """K3 / FR #4: ACK path — unaccepted → accepted; worker busy.
+
+    Idempotent: if already accepted by the same nick, return accepted again.
+    """
     doc = load_queue(home)
-    ident = ident if ident.startswith("#") else f"#{ident}"
+    ident = _norm_ident(ident)
+    repo = _norm_repo(repo)
+    task_u = str(task or "").upper()
+    nick_s = str(nick or "").strip()
+    channel_s = str(channel or "").strip()
+
+    # Already accepted by this nick?
+    for row in list(doc.get("accepted") or []):
+        if (
+            _norm_repo(str(row.get("repo") or "")) == repo
+            and str(row.get("task") or "").upper() == task_u
+            and _norm_ident(str(row.get("id") or "")) == ident
+            and str(row.get("nick") or "") == nick_s
+        ):
+            doc["workers"][nick_s] = {
+                "state": "busy",
+                "job": f"{repo} {task_u} {ident}",
+                "channel": channel_s or str(row.get("channel") or ""),
+                "ts": _utc_now(),
+            }
+            save_queue(home, doc)
+            return "accepted", row
+
     match = None
     for i, row in enumerate(list(doc["unaccepted"])):
         if (
-            str(row.get("repo")) == repo
-            and str(row.get("task")).upper() == task.upper()
-            and str(row.get("id")) == ident
+            _norm_repo(str(row.get("repo") or "")) == repo
+            and str(row.get("task") or "").upper() == task_u
+            and _norm_ident(str(row.get("id") or "")) == ident
         ):
             match = doc["unaccepted"].pop(i)
             break
     if match is None:
         return "no_match", None
-    match["nick"] = nick
-    match["channel"] = channel
+
+    match["nick"] = nick_s
+    match["channel"] = channel_s
     match["accepted_ts"] = _utc_now()
+    match["task"] = task_u
+    match["id"] = ident
+    match["repo"] = repo
     doc["accepted"].append(match)
     if len(doc["accepted"]) > ACCEPTED_CAP:
         doc["accepted"] = doc["accepted"][-ACCEPTED_CAP:]
-    doc["workers"][nick] = {
+    doc["workers"][nick_s] = {
         "state": "busy",
-        "job": f"{repo} {match.get('task')} {ident}",
-        "channel": channel,
+        "job": f"{repo} {task_u} {ident}",
+        "channel": channel_s,
         "ts": _utc_now(),
     }
     save_queue(home, doc)
     return "accepted", match
 
+
+def nack_job(
+    home: Path,
+    nick: str,
+    task: str,
+    repo: str,
+    ident: str,
+) -> tuple[str, dict | None]:
+    """NACK|GIVEUP: accepted → unaccepted; worker idle."""
+    doc = load_queue(home)
+    ident = _norm_ident(ident)
+    repo = _norm_repo(repo)
+    task_u = str(task or "").upper()
+    nick_s = str(nick or "").strip()
+    match = None
+    for i, row in enumerate(list(doc["accepted"])):
+        if (
+            str(row.get("nick") or "") == nick_s
+            and _norm_repo(str(row.get("repo") or "")) == repo
+            and str(row.get("task") or "").upper() == task_u
+            and _norm_ident(str(row.get("id") or "")) == ident
+        ):
+            match = doc["accepted"].pop(i)
+            break
+    if match is None:
+        doc["workers"][nick_s] = {"state": "idle", "ts": _utc_now()}
+        save_queue(home, doc)
+        return "no_match", None
+    for k in ("nick", "channel", "accepted_ts"):
+        match.pop(k, None)
+    match["nack_ts"] = _utc_now()
+    _remove_matching(
+        doc["unaccepted"],
+        lambda r: _same(r, repo, task_u, ident),
+    )
+    doc["unaccepted"].append(match)
+    doc["workers"][nick_s] = {"state": "idle", "ts": _utc_now()}
+    save_queue(home, doc)
+    return "nacked", match
+
+
+def queue_counts(home: Path) -> dict[str, int]:
+    doc = load_queue(home)
+    return {
+        "unaccepted": len(doc.get("unaccepted") or []),
+        "accepted": len(doc.get("accepted") or []),
+        "done": len(doc.get("done") or []),
+    }
+
+
+def accepted_rows(home: Path) -> list[dict]:
+    return list(load_queue(home).get("accepted") or [])
 
 def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result: str = "ok", url: str = "") -> tuple[str, dict | None]:
     """DONE path: accepted → done; worker idle; optional supersede hook point."""

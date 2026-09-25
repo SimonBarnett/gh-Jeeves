@@ -15,6 +15,8 @@ from .queue import (
     complete_job,
     format_offer,
     load_queue,
+    nack_job,
+    queue_counts,
     top_unaccepted,
     worker_state,
 )
@@ -24,7 +26,7 @@ from .cast_iron import (
     is_forbidden_shop_egress,
     shop_egress_allowed_for_chair,
 )
-from .wire import is_bored, is_list, parse_ack, parse_done
+from .wire import is_bored, is_list, parse_ack, parse_done, parse_nack
 
 
 class JeevesChair:
@@ -158,17 +160,43 @@ class JeevesChair:
             if bored_gate(self.home, src, target, skip_idle_check=True) != "ok":
                 self.handled.append(f"ignored_ack_bad_nick:{src}")
                 return
+            # K3 / FR #4: mark accepted + busy on webhook (never leave accepted empty after ACK).
             st, row = accept_job(self.home, src, target, ack.task, ack.repo, ack.number)
+            counts = queue_counts(self.home)
             if st == "accepted":
+                job = f"{ack.repo} {ack.task} #{ack.number}"
+                self._post_report(
+                    {
+                        "op": "queue_accept",
+                        "nick": src,
+                        "state": "busy",
+                        "job": job,
+                        "repo": ack.repo,
+                        "task": ack.task,
+                        "id": f"#{ack.number}",
+                        "accepted_row": row,
+                        "queue": counts,
+                    }
+                )
+                # also legacy worker_state for older digest consumers
                 self._post_report(
                     {
                         "op": "worker_state",
                         "nick": src,
                         "state": "busy",
-                        "job": f"{ack.repo} {ack.task} #{ack.number}",
+                        "job": job,
                     }
                 )
                 self.handled.append(f"ack:{src}:{ack.repo}#{ack.number}")
+            else:
+                self.handled.append(f"ack_no_match:{src}:{ack.repo}#{ack.number}")
+            return
+        nack = parse_nack(text)
+        if nack:
+            kind, task, repo, number = nack
+            st, row = nack_job(self.home, src, task, repo, number)
+            self._post_report({"op": "worker_state", "nick": src, "state": "idle"})
+            self.handled.append(f"nack:{src}:{repo}#{number}:{st}")
             return
         done = parse_done(text)
         if done:
@@ -178,10 +206,22 @@ class JeevesChair:
             st, row = complete_job(
                 self.home, src, done.task, done.repo, done.number, done.result, done.url
             )
+            counts = queue_counts(self.home)
+            self._post_report(
+                {
+                    "op": "queue_done",
+                    "nick": src,
+                    "state": "idle",
+                    "repo": done.repo,
+                    "task": done.task,
+                    "id": f"#{done.number}",
+                    "result": done.result,
+                    "queue": counts,
+                }
+            )
             self._post_report({"op": "worker_state", "nick": src, "state": "idle"})
             self.handled.append(f"done:{src}:{done.repo}#{done.number}:{st}")
             return
-
     def _run(self) -> None:
         while not self._stop.is_set():
             try:

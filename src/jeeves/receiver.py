@@ -90,11 +90,45 @@ def make_handler(state: DigestState):
                 payload = self._read_json()
                 with state.lock:
                     state.events.append({"report": payload})
-                    # merge worker busy/idle from Jeeves writer
                     op = str(payload.get("op") or "")
-                    if op == "worker_state":
-                        q = load_queue(state.home)
-                        nick = str(payload.get("nick") or "")
+                    q = load_queue(state.home)
+                    nick = str(payload.get("nick") or "")
+                    # K3: queue_accept mirrors accepted row onto digest (source of truth).
+                    if op == "queue_accept":
+                        row = payload.get("accepted_row")
+                        if isinstance(row, dict) and row.get("repo") and row.get("id"):
+                            # drop from unaccepted if still present
+                            rid = str(row.get("id"))
+                            rrepo = str(row.get("repo"))
+                            rtask = str(row.get("task") or "").upper()
+                            q["unaccepted"] = [
+                                r
+                                for r in (q.get("unaccepted") or [])
+                                if not (
+                                    str(r.get("repo")) == rrepo
+                                    and str(r.get("id")) == rid
+                                    and str(r.get("task") or "").upper() == rtask
+                                )
+                            ]
+                            # de-dupe accepted
+                            q["accepted"] = [
+                                r
+                                for r in (q.get("accepted") or [])
+                                if not (
+                                    str(r.get("repo")) == rrepo
+                                    and str(r.get("id")) == rid
+                                    and str(r.get("task") or "").upper() == rtask
+                                )
+                            ]
+                            q.setdefault("accepted", []).append(row)
+                        if nick:
+                            q.setdefault("workers", {})[nick] = {
+                                "state": str(payload.get("state") or "busy"),
+                                "job": payload.get("job"),
+                                "ts": payload.get("ts"),
+                            }
+                        save_queue(state.home, q)
+                    elif op == "worker_state":
                         if nick:
                             q.setdefault("workers", {})[nick] = {
                                 "state": str(payload.get("state") or "idle"),
@@ -102,10 +136,16 @@ def make_handler(state: DigestState):
                                 "ts": payload.get("ts"),
                             }
                             save_queue(state.home, q)
+                    elif op == "queue_done":
+                        if nick:
+                            q.setdefault("workers", {})[nick] = {
+                                "state": "idle",
+                                "ts": payload.get("ts"),
+                            }
+                            save_queue(state.home, q)
                 self.send_response(204)
                 self.end_headers()
-                return
-            self.send_response(404)
+                return            self.send_response(404)
             self.end_headers()
 
     return Handler
