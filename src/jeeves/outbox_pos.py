@@ -97,9 +97,15 @@ def resolve_outbox_start(
             pos = 0
             write_pos(home, 0)
 
+    # Negative corrupt offsets must not become 0 (full #bobiverse replay).
     if pos < 0:
-        pos = 0
-    if pos > size:
+        if size > 0 and not replay:
+            pos = size
+            write_pos(home, pos)
+        else:
+            pos = 0
+            write_pos(home, 0)
+    elif pos > size:
         pos = size
         write_pos(home, pos)
     return pos
