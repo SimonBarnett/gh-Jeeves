@@ -20,8 +20,8 @@ _NACK = re.compile(
 )
 # !bored / !BORED / optional trailing junk stripped — ear owns this command.
 _BORED = re.compile(r"^!+\s*bored\b", re.I)
-_LIST = re.compile(r"^!+\s*list\b", re.I)
-_HELP = re.compile(r"^!+\s*help\b", re.I)
+_LIST = re.compile(r"^!list(?:\s+\S+)?\s*$", re.I)
+_HELP = re.compile(r"^!+\s*help(?:\s+\S+)?\s*$", re.I)
 
 
 @dataclass(frozen=True)
@@ -54,21 +54,21 @@ def is_help(body: str) -> bool:
 
 
 def parse_list_filters(body: str) -> tuple[str | None, str | None, bool]:
-    """Return (task_filter, repo_filter, list_all) for ``!list …``."""
+    """Return (task_filter, repo_filter, list_all) for ``!list ...``."""
     parts = (body or "").strip().split()
     if not parts or not parts[0].lower().lstrip("!").startswith("list"):
         return None, None, False
     task_f = None
     repo_f = None
     list_all = False
-    for p in parts[1:]:
-        low = p.lower()
+    for tok in parts[1:]:
+        low = tok.lower()
         if low == "all":
             list_all = True
         elif low in ("fr", "mrb", "uat", "pr", "fix", "build"):
             task_f = low.upper() if low != "pr" else "MRB"
-        elif "/" in p:
-            repo_f = p
+        elif "/" in tok:
+            repo_f = tok
     return task_f, repo_f, list_all
 
 

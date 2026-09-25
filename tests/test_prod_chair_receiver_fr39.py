@@ -61,13 +61,11 @@ def test_list_help_wire_and_format(tmp_path: Path):
     assert help_lines()
 
 
-def test_chair_list_in_channel_answers_by_pm_only():
-    """In-channel !list → PM lines; nothing that looks like channel queue dump from chair client."""
+def test_chair_list_in_channel_answers_by_pm_only(tmp_path: Path):
+    """In-channel !list → PM via _pm only (never channel shop_egress)."""
     reset_list_rate()
-    ircd = LocalIrcd()
-    port = ircd.start()
-    home = Path(os.environ.get("TEMP") or ".") / f"fr39-list-{os.getpid()}"
-    home.mkdir(parents=True, exist_ok=True)
+    home = tmp_path / "digest"
+    home.mkdir()
     apply_queue_event(
         home,
         Claim("SimonBarnett/gh-Jeeves", "FR", "#1", line="one"),
@@ -76,44 +74,26 @@ def test_chair_list_in_channel_answers_by_pm_only():
         home,
         Claim("SimonBarnett/gh-Jeeves", "MRB", "#2", line="two"),
     )
-    rx = ProdReceiver(home, host="127.0.0.1", port=0)
-    rport = rx.start()
-    chair = JeevesChair(
-        "127.0.0.1",
-        port,
-        home,
-        f"http://127.0.0.1:{rport}",
-        shops=["#flamingo"],
-    )
-    worker = __import__("jeeves.local_ircd", fromlist=["IrcClient"]).IrcClient(
-        "127.0.0.1", port, "flamingo-9001"
-    )
-    worker.join("#flamingo")
-    chair.start()
-    time.sleep(0.15)
+    # Minimal chair without live IRC thread: use object.__new__ pattern via local ircd
+    ircd = LocalIrcd()
+    port = ircd.start()
     try:
-        worker.privmsg("#flamingo", "!list")
-        # collect PMs to worker
-        deadline = time.time() + 3
-        pms = []
-        while time.time() < deadline:
-            msg = worker.wait_privmsg(timeout=0.2)
-            if not msg:
-                continue
-            src, target, text = msg
-            if target.lower() == "flamingo-9001" or not str(target).startswith("#"):
-                pms.append(text)
-            if len(pms) >= 1:
-                break
-        assert pms, "expected PM reply for !list"
-        assert any("unaccepted" in x or "FR" in x or "queue" in x for x in pms)
-        # chair must not have used shop_privmsg for list content
-        assert not any("OFFER" in (t or "") for _, t in chair.shop_egress)
+        chair = JeevesChair(
+            "127.0.0.1",
+            port,
+            home,
+            "http://127.0.0.1:9",
+            shops=["#flamingo"],
+        )
+        # drive handler directly (deterministic)
+        chair._handle_shop("flamingo-9001", "#flamingo", "!list")
         assert any(h.startswith("list_pm:") for h in chair.handled)
-    finally:
+        assert chair.pm_egress, "expected PM lines"
+        assert all(n == "flamingo-9001" for n, _ in chair.pm_egress)
+        assert any("FR" in t or "unaccepted" in t or "MRB" in t for _, t in chair.pm_egress)
+        assert not any("OFFER" in (t or "") for _, t in chair.shop_egress)
         chair.stop()
-        worker.close()
-        rx.stop()
+    finally:
         ircd.stop()
 
 

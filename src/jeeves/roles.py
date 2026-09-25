@@ -25,12 +25,8 @@ from .cast_iron import (
     is_forbidden_shop_egress,
     shop_egress_allowed_for_chair,
 )
-from .listfmt import (
-    format_unaccepted_list,
-    help_lines,
-    list_rate_notice,
-    list_rate_ok,
-)
+from .helpcmd import HelpRateLimit, build_help, parse_help
+from .listfmt import format_unaccepted_list, list_rate_notice, list_rate_ok
 from .wire import (
     is_bored,
     is_help,
@@ -69,10 +65,17 @@ class JeevesChair:
         self._t = threading.Thread(target=self._run, name="jeeves-chair", daemon=True)
         self.handled: list[str] = []
         self.shop_egress: list[tuple[str, str]] = []  # (channel, text) if any slip through
+        self.pm_egress: list[tuple[str, str]] = []  # (nick, text) help/list
+        self.help_rate = HelpRateLimit()
         self.resync_scheduler = resync_scheduler
         # Policy pins — tests assert these stay false.
         assert chair_handles_bored() is False
         assert chair_may_offer() is False
+
+    def _pm(self, nick: str, text: str) -> None:
+        """Private message only (help/list). Never channel flood."""
+        self.pm_egress.append((nick, text))
+        self.client.privmsg(nick, text)
 
     def _shop_privmsg(self, channel: str, text: str) -> None:
         """Chair must remain silent in shops (K1). Block claim/offer egress."""
@@ -147,39 +150,41 @@ class JeevesChair:
                 self.handled.append(f"announce:{line}")
         pos_path.write_text(str(len(data)), encoding="utf-8")
 
-    def _pm_list_help(self, src: str, text: str) -> bool:
-        """Answer !list / !help by PM only (FR #39). Never post queue lines in-channel."""
-        if is_help(text):
-            for line in help_lines():
-                self.client.privmsg(src, line)
-            self.handled.append(f"help_pm:{src}")
-            return True
-        if is_list(text):
-            if not list_rate_ok(src):
-                self.client.privmsg(src, list_rate_notice(src))
-                self.handled.append(f"list_rate:{src}")
-                return True
-            task_f, repo_f, list_all = parse_list_filters(text)
-            lines = format_unaccepted_list(
-                self.home,
-                task_filter=task_f,
-                repo_filter=repo_f,
-                list_all=list_all,
-            )
-            for line in lines:
-                self.client.privmsg(src, line)
-            self.handled.append(f"list_pm:{src}:{len(lines)}")
-            return True
-        return False
+    def _handle_list(self, src: str, text: str) -> None:
+        """FR #39 / #208: !list by PM only (channel or PM)."""
+        if not list_rate_ok(src):
+            self._pm(src, list_rate_notice(src))
+            self.handled.append(f"list_rate:{src}")
+            return
+        task_f, repo_f, list_all = parse_list_filters(text)
+        lines = format_unaccepted_list(
+            self.home, task_filter=task_f, repo_filter=repo_f, list_all=list_all
+        )
+        for line in lines:
+            self._pm(src, line)
+        self.handled.append(f"list_pm:{src}:{len(lines)}")
+
+    def _handle_help(self, src: str, text: str) -> None:
+        """FR #27: !help always answered by PM, never in channel."""
+        ok, arg = parse_help(text)
+        if not ok:
+            return
+        result = build_help(src, arg, rate=self.help_rate)
+        for line in result.lines:
+            self._pm(src, line)
+        self.handled.append(f"help:{src}:{arg or '*'}:{len(result.lines)}")
 
     def _handle_shop(self, src: str, target: str, text: str) -> None:
-        # PM path: !list / !help
-        if not target.startswith("#"):
-            self._pm_list_help(src, text)
+        # !help from channel or PM → reply by PM only (no channel flood)
+        if is_help(text) or parse_help(text)[0]:
+            self._handle_help(src, text)
             return
-        # In-channel !list / !help → PM answer only (never channel noise)
-        if is_list(text) or is_help(text):
-            self._pm_list_help(src, text)
+        if is_list(text):
+            self._handle_list(src, text)
+            return
+        if not target.startswith("#"):
+            if is_list(text):
+                self._handle_list(src, text)
             return
         # silent shop: ACK / DONE only — never !bored, never OFFER/claim (K1)
         if is_bored(text):
