@@ -82,9 +82,12 @@ if ($ChairEntry) {
         }
     }
 }
+# FR #39: production entry is python -m jeeves (chair+receiver)
+$plan.python_module = 'jeeves'
+$plan.python_args = 'all'
 if (-not $plan.chair_entry) {
-    [void]$plan.warnings.Add('No local chair entry yet; production may use agentic_irc until cut-over')
-    $plan.chair_entry = 'PENDING: tools/Start-BobJeeves.ps1 or python -m jeeves'
+    [void]$plan.warnings.Add('No local chair entry yet; expected src/jeeves/__main__.py')
+    $plan.chair_entry = 'python -m jeeves'
 }
 
 if ($PythonPath) {
@@ -162,10 +165,14 @@ if ($Apply) {
             [void]$plan.warnings.Add("missing $startHelper - create before production Apply")
         }
         New-Item -ItemType Directory -Force -Path $JeevesHome, $DigestHome | Out-Null
-        if (-not $plan.nssm) {
+        if (-not $plan.python) {
+            $plan.ok = $false
+            [void]$plan.errors.Add('python required for Apply')
+        } elseif (-not $plan.nssm) {
             $plan.ok = $false
             [void]$plan.errors.Add('nssm required for Apply')
         } else {
+            # NSSM wraps python -m jeeves all (singleton under JeevesHome)
             $binPath = '"' + $plan.nssm + '"'
             if (-not $svc) {
                 & sc.exe create $ServiceName binPath= $binPath start= auto depend= $DependsOn DisplayName= $DisplayName obj= LocalSystem
@@ -181,8 +188,13 @@ if ($Apply) {
                 }
             }
             if ($plan.ok) {
-                & sc.exe description $ServiceName 'gh-Jeeves chair. Depends on BobIrcd. Never manages Ergo.' | Out-Null
-                [void]$plan.steps.Add('Apply completed (service registered)')
+                & sc.exe description $ServiceName 'gh-Jeeves chair+receiver (python -m jeeves). Depends on BobIrcd. Never manages Ergo.' | Out-Null
+                # Configure nssm application = python, args = -m jeeves all
+                & $plan.nssm set $ServiceName Application $plan.python | Out-Null
+                & $plan.nssm set $ServiceName AppDirectory $RepoRoot | Out-Null
+                & $plan.nssm set $ServiceName AppParameters "-m jeeves all --jeeves-home `"$JeevesHome`" --digest-home `"$DigestHome`"" | Out-Null
+                & $plan.nssm set $ServiceName AppEnvironmentExtra "BOB_DIGEST_HOME=$DigestHome" "JEEVES_HOME=$JeevesHome" "PYTHONPATH=$RepoRoot\src" | Out-Null
+                [void]$plan.steps.Add('Apply completed (nssm -> python -m jeeves all)')
             }
         }
     }

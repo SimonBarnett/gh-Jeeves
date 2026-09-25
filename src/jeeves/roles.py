@@ -26,7 +26,16 @@ from .cast_iron import (
     shop_egress_allowed_for_chair,
 )
 from .helpcmd import HelpRateLimit, build_help, parse_help
-from .wire import is_bored, is_help, is_list, parse_ack, parse_done, parse_nack  # noqa: F401
+from .listfmt import format_unaccepted_list, list_rate_notice, list_rate_ok
+from .wire import (
+    is_bored,
+    is_help,
+    is_list,
+    parse_ack,
+    parse_done,
+    parse_list_filters,
+    parse_nack,
+)  # noqa: F401
 
 
 class JeevesChair:
@@ -141,6 +150,20 @@ class JeevesChair:
                 self.handled.append(f"announce:{line}")
         pos_path.write_text(str(len(data)), encoding="utf-8")
 
+    def _handle_list(self, src: str, text: str) -> None:
+        """FR #39 / #208: !list by PM only (channel or PM)."""
+        if not list_rate_ok(src):
+            self._pm(src, list_rate_notice(src))
+            self.handled.append(f"list_rate:{src}")
+            return
+        task_f, repo_f, list_all = parse_list_filters(text)
+        lines = format_unaccepted_list(
+            self.home, task_filter=task_f, repo_filter=repo_f, list_all=list_all
+        )
+        for line in lines:
+            self._pm(src, line)
+        self.handled.append(f"list_pm:{src}:{len(lines)}")
+
     def _handle_help(self, src: str, text: str) -> None:
         """FR #27: !help always answered by PM, never in channel."""
         ok, arg = parse_help(text)
@@ -156,19 +179,12 @@ class JeevesChair:
         if is_help(text) or parse_help(text)[0]:
             self._handle_help(src, text)
             return
+        if is_list(text):
+            self._handle_list(src, text)
+            return
         if not target.startswith("#"):
             if is_list(text):
-                q = load_queue(self.home)
-                rows = q.get("unaccepted") or []
-                if not rows:
-                    self._pm(src, "queue empty")
-                else:
-                    for row in rows[:10]:
-                        self._pm(
-                            src,
-                            f"{row.get('task')} {row.get('repo')}{row.get('id')} {row.get('line') or ''}".strip(),
-                        )
-                self.handled.append("list")
+                self._handle_list(src, text)
             return
         # silent shop: ACK / DONE only — never !bored, never OFFER/claim (K1)
         if is_bored(text):

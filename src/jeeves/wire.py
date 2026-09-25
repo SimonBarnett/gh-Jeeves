@@ -53,6 +53,25 @@ def is_help(body: str) -> bool:
     return bool(_HELP.match((body or "").strip()))
 
 
+def parse_list_filters(body: str) -> tuple[str | None, str | None, bool]:
+    """Return (task_filter, repo_filter, list_all) for ``!list ...``."""
+    parts = (body or "").strip().split()
+    if not parts or not parts[0].lower().lstrip("!").startswith("list"):
+        return None, None, False
+    task_f = None
+    repo_f = None
+    list_all = False
+    for tok in parts[1:]:
+        low = tok.lower()
+        if low == "all":
+            list_all = True
+        elif low in ("fr", "mrb", "uat", "pr", "fix", "build"):
+            task_f = low.upper() if low != "pr" else "MRB"
+        elif "/" in tok:
+            repo_f = tok
+    return task_f, repo_f, list_all
+
+
 def parse_ack(body: str) -> AckMsg | None:
     m = _ACK.match((body or "").strip())
     if not m:
