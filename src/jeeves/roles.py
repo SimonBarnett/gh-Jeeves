@@ -25,7 +25,21 @@ from .cast_iron import (
     is_forbidden_shop_egress,
     shop_egress_allowed_for_chair,
 )
-from .wire import is_bored, is_list, parse_ack, parse_done, parse_nack  # noqa: F401
+from .listfmt import (
+    format_unaccepted_list,
+    help_lines,
+    list_rate_notice,
+    list_rate_ok,
+)
+from .wire import (
+    is_bored,
+    is_help,
+    is_list,
+    parse_ack,
+    parse_done,
+    parse_list_filters,
+    parse_nack,
+)  # noqa: F401
 
 
 class JeevesChair:
@@ -133,20 +147,39 @@ class JeevesChair:
                 self.handled.append(f"announce:{line}")
         pos_path.write_text(str(len(data)), encoding="utf-8")
 
+    def _pm_list_help(self, src: str, text: str) -> bool:
+        """Answer !list / !help by PM only (FR #39). Never post queue lines in-channel."""
+        if is_help(text):
+            for line in help_lines():
+                self.client.privmsg(src, line)
+            self.handled.append(f"help_pm:{src}")
+            return True
+        if is_list(text):
+            if not list_rate_ok(src):
+                self.client.privmsg(src, list_rate_notice(src))
+                self.handled.append(f"list_rate:{src}")
+                return True
+            task_f, repo_f, list_all = parse_list_filters(text)
+            lines = format_unaccepted_list(
+                self.home,
+                task_filter=task_f,
+                repo_filter=repo_f,
+                list_all=list_all,
+            )
+            for line in lines:
+                self.client.privmsg(src, line)
+            self.handled.append(f"list_pm:{src}:{len(lines)}")
+            return True
+        return False
+
     def _handle_shop(self, src: str, target: str, text: str) -> None:
+        # PM path: !list / !help
         if not target.startswith("#"):
-            if is_list(text):
-                q = load_queue(self.home)
-                rows = q.get("unaccepted") or []
-                if not rows:
-                    self.client.privmsg(src, "queue empty")
-                else:
-                    for row in rows[:10]:
-                        self.client.privmsg(
-                            src,
-                            f"{row.get('task')} {row.get('repo')}{row.get('id')} {row.get('line') or ''}".strip(),
-                        )
-                self.handled.append("list")
+            self._pm_list_help(src, text)
+            return
+        # In-channel !list / !help → PM answer only (never channel noise)
+        if is_list(text) or is_help(text):
+            self._pm_list_help(src, text)
             return
         # silent shop: ACK / DONE only — never !bored, never OFFER/claim (K1)
         if is_bored(text):
