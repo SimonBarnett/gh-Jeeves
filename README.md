@@ -1,4 +1,4 @@
-# gh-Jeeves
+﻿# gh-Jeeves
 
 **Objective:** The Bob Fleet GIT chair is a deterministic Windows service that processes GitHub events through to worker ACK/DONE and queue supersede with scripts only.
 
@@ -8,15 +8,15 @@
 
 With every LLM/token pool disabled, this chain must complete with **scripts only**:
 
-1. GitHub event → Bob GIT webhook  
-2. Jeeves announces `GIT …` on `#bobiverse` and updates the queue (supersede rules)  
+1. GitHub event â†’ Bob GIT webhook  
+2. Jeeves announces `GIT â€¦` on `#bobiverse` and updates the queue (supersede rules)  
 3. Idle worker `!bored` in its own `#{machine}`  
 4. **bob-{machine} ear** offers the top unaccepted job  
-5. Worker `ACK` → Jeeves marks accepted + busy  
+5. Worker `ACK` â†’ Jeeves marks accepted + busy  
 6. Worker does the task (only step where AI is allowed)  
-7. Worker `DONE` → Jeeves marks done + idle + supersede  
+7. Worker `DONE` â†’ Jeeves marks done + idle + supersede  
 
-**G1** (CI, every PR): local test ircd E2E with no-LLM guard (plain + **TLS path**, FR #46). **G2** (after deploy): live smoke including native TLS to Ergo. A release is not shippable without both. Full definition: `docs/brief/JEEVES_BRIEF.md` §0.
+**G1** (CI, every PR): local test ircd E2E with no-LLM guard (plain + **TLS path**, FR #46). **G2** (after deploy): live smoke including native TLS to Ergo. A release is not shippable without both. Full definition: `docs/brief/JEEVES_BRIEF.md` Â§0.
 
 **IRC client:** gh-Jeeves owns a **native TLS IRC client** (`jeeves.tls_irc`) for the chair. It does **not** import or spawn `agentic_irc` `irc_agent --chair`. Production: `python -m jeeves chair --tls --host irc.ntsa.uk --port 6697`.
 
@@ -35,12 +35,15 @@ flowchart LR
 
 ## CAST IRON rules
 
+**Channel join (FR #55):** on connect Jeeves `LIST`s the server and JOINs every channel (denylist skips); periodic re-LIST joins new shops. KICK rejoins with backoff.
+
+
 1. Announce only on `#bobiverse`; queue on digest webhook.  
-2. Silent in every `#{machine}`: ACK → accepted+busy; DONE → done+idle+supersede.  
+2. Silent in every `#{machine}`: ACK â†’ accepted+busy; DONE â†’ done+idle+supersede.  
 3. **Never** handle `!bored`; **never** offer or assign.  
 4. Workers stay in their own shop; ear owns offers.  
 5. Deterministic scripts-only path (works during token outage).  
-6. Supersede: FR↔MRB↔UAT per GitHub events (see diagrams).  
+6. Supersede: FRâ†”MRBâ†”UAT per GitHub events (see diagrams).  
 7. MRB PASS closes FR; FAIL one fix PR, FR stays open; only Bob stamps UAT.  
 8. `!list` by PM.  
 9. Own Windows service; never touch Ergo/BobIrcd.  
@@ -64,7 +67,7 @@ Migration: `docs/migration-plan.md`. Vision input: `docs/brief/JEEVES_BRIEF.md`.
 
 ## Diagrams
 
-One diagram per concern (~5–9 nodes). Index first; then lifecycle; then deployment/recovery.
+One diagram per concern (~5â€“9 nodes). Index first; then lifecycle; then deployment/recovery.
 
 ### Index
 
@@ -81,7 +84,7 @@ flowchart LR
 
 *Caption: the map of the diagrams below. Top row is the job lifecycle; bottom row is where things run and how they recover.*
 
-### GitHub event → Jeeves announce
+### GitHub event â†’ Jeeves announce
 
 ```mermaid
 flowchart LR
@@ -94,7 +97,7 @@ flowchart LR
   J --> BV["#bobiverse GIT line"]
 ```
 
-*Caption: one GitHub event becomes one `GIT …` line on #bobiverse and one queue change, with no LLM involved.*
+*Caption: one GitHub event becomes one `GIT â€¦` line on #bobiverse and one queue change, with no LLM involved.*
 
 ### Queue supersede rules
 
@@ -110,7 +113,7 @@ stateDiagram-v2
 
 *Caption: the queue holds only the current task per piece of work, and each GitHub event replaces it deterministically.*
 
-### Shop claim: !bored → offer → ACK
+### Shop claim: !bored â†’ offer â†’ ACK
 
 ```mermaid
 sequenceDiagram
@@ -127,7 +130,7 @@ sequenceDiagram
 
 *Caption: the ear offers and the worker ACKs in #machine, while Jeeves only listens and records the acceptance.*
 
-### ACK/DONE → webhook busy/idle
+### ACK/DONE â†’ webhook busy/idle
 
 ```mermaid
 flowchart LR
@@ -233,3 +236,4 @@ flowchart TD
 ## License / ownership
 
 Public product under SimonBarnett. Plan seat created this repo with Bob GIT webhook `https://irc.ntsa.uk/bob/v1/git`.
+
