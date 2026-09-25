@@ -97,6 +97,8 @@ def test_k3_ack_no_match_when_missing(tmp_path: Path):
     assert st == "no_match"
     assert row is None
     assert queue_counts(home)["accepted"] == 0
+    # FR #102: parseable ACK still records the worker busy on no_match
+    assert worker_state(home, "mh-1") == "busy"
 
 
 def test_k3_done_and_nack(tmp_path: Path):

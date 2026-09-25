@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# Allow optional trailing punctuation; number may be #n or n.
+# Allow optional trailing text after the number (FR #102: URL suffix must not
+# silently drop the ACK). Number may be #n or n.
 _ACK = re.compile(
-    r"^ACK\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)\s*$",
+    r"^ACK\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)(?:\s+(.*))?$",
     re.I,
 )
 _DONE = re.compile(
@@ -15,9 +16,12 @@ _DONE = re.compile(
     re.I,
 )
 _NACK = re.compile(
-    r"^(NACK|GIVEUP)\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)\s*$",
+    r"^(NACK|GIVEUP)\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)(?:\s+(.*))?$",
     re.I,
 )
+# Prefix that looks like an ACK but failed the full parse (for reject hint).
+_ACK_PREFIX = re.compile(r"^ACK\b", re.I)
+_ACK_HINT = "format: ACK FR|MRB|UAT owner/repo#N"
 # !bored / !BORED / optional trailing junk stripped — ear owns this command.
 _BORED = re.compile(r"^!+\s*bored\b", re.I)
 # !list with zero or more args (all, repo, fr, …) — FR #50
@@ -38,6 +42,7 @@ class AckMsg:
     task: str
     repo: str
     number: str
+    extra: str = ""  # trailing text after number (logged; FR #102)
 
 
 @dataclass(frozen=True)
@@ -131,7 +136,22 @@ def parse_ack(body: str) -> AckMsg | None:
     m = _ACK.match((body or "").strip())
     if not m:
         return None
-    return AckMsg(task=m.group(1).upper(), repo=m.group(2), number=m.group(3))
+    extra = (m.group(4) or "").strip()
+    return AckMsg(
+        task=m.group(1).upper(),
+        repo=m.group(2),
+        number=m.group(3),
+        extra=extra,
+    )
+
+
+def looks_like_ack(body: str) -> bool:
+    """True when the line starts with ACK but may still fail parse_ack."""
+    return bool(_ACK_PREFIX.match((body or "").strip()))
+
+
+def ack_format_hint() -> str:
+    return _ACK_HINT
 
 
 def parse_done(body: str) -> DoneMsg | None:

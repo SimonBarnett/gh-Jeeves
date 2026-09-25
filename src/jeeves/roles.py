@@ -18,9 +18,11 @@ from .offer import EarOfferState, contains_assign, is_single_line
 from .queue import (
     accept_job,
     complete_job,
+    expire_stale_workers,
     load_queue,
     nack_job,
     queue_counts,
+    release_worker,
     worker_state,
 )
 from .cast_iron import (
@@ -49,6 +51,7 @@ from .ignore import (
 )
 from .listfmt import FLOOD_S, format_unaccepted_list, list_rate_notice, list_rate_ok
 from .wire import (
+    ack_format_hint,
     is_bored,
     is_focus,
     is_help,
@@ -60,6 +63,7 @@ from .wire import (
     is_sweep,
     is_unfocus,
     is_unignore,
+    looks_like_ack,
     parse_ack,
     parse_done,
     parse_list_filters,
@@ -192,22 +196,22 @@ class JeevesChair:
         except OSError:
             pass
 
-        # Wire raw JOIN/ACCOUNT/MODE/LIST/KICK into FR52 + FR55 controllers
-        if self.mode_grants is not None or self.auto_join_ctrl is not None:
-            prev = getattr(self.client, "on_raw", None)
+        # Wire raw JOIN/ACCOUNT/MODE/LIST/KICK/QUIT into FR52 + FR55 + FR #102
+        prev = getattr(self.client, "on_raw", None)
 
-            def _on_raw(line: str) -> None:
-                if prev:
-                    try:
-                        prev(line)
-                    except Exception:
-                        pass
-                if self.mode_grants is not None:
-                    self.mode_grants.handle_raw(line)
-                if self.auto_join_ctrl is not None:
-                    self.auto_join_ctrl.handle_raw(line)
+        def _on_raw(line: str) -> None:
+            if prev:
+                try:
+                    prev(line)
+                except Exception:
+                    pass
+            if self.mode_grants is not None:
+                self.mode_grants.handle_raw(line)
+            if self.auto_join_ctrl is not None:
+                self.auto_join_ctrl.handle_raw(line)
+            self._handle_quit_raw(line)
 
-            self.client.on_raw = _on_raw  # type: ignore[method-assign]
+        self.client.on_raw = _on_raw  # type: ignore[method-assign]
         if self.auto_join_ctrl is None and hasattr(self.client, "send_raw"):
             # auto_join disabled but client can send_raw — still static join
             if not auto_join:
@@ -215,6 +219,7 @@ class JeevesChair:
         # Policy pins — tests assert these stay false.
         assert chair_handles_bored() is False
         assert chair_may_offer() is False
+        self._last_stale_sweep = 0.0
 
     def _pm(self, nick: str, text: str) -> None:
         """Private message only (help/list). Never channel flood. Non-blocking (#74)."""
@@ -595,12 +600,20 @@ class JeevesChair:
             if bored_gate(self.home, src, target, skip_idle_check=True) != "ok":
                 self.handled.append(f"ignored_ack_bad_nick:{src}")
                 return
-            # K3 / FR #4: mark accepted + busy on webhook (never leave accepted empty after ACK).
+            if ack.extra:
+                log.info(
+                    "event=ack_extra nick=%s repo=%s#%s extra=%s",
+                    src,
+                    ack.repo,
+                    ack.number,
+                    ack.extra[:120],
+                )
+            # K3 / FR #4 / FR #102: accept when matched; always record busy.
             st, row = accept_job(self.home, src, target, ack.task, ack.repo, ack.number)
             counts = queue_counts(self.home)
-            if st == "accepted":
-                job = f"{ack.repo} {ack.task} #{ack.number}"
-                try:
+            job = f"{ack.repo} {ack.task} #{ack.number}"
+            try:
+                if st == "accepted":
                     self._post_report(
                         {
                             "op": "queue_accept",
@@ -614,27 +627,52 @@ class JeevesChair:
                             "queue": counts,
                         }
                     )
-                    self._post_report(
-                        {
-                            "op": "worker_state",
-                            "nick": src,
-                            "state": "busy",
-                            "job": job,
-                        }
-                    )
-                except Exception as e:
-                    self.handled.append(f"ack_report_err:{src}")
-                    log.warning("cmd=ack nick=%s report_err=%s", src, type(e).__name__)
+                # Always mirror busy — including no_match (FR #102).
+                self._post_report(
+                    {
+                        "op": "worker_state",
+                        "nick": src,
+                        "state": "busy",
+                        "job": job,
+                    }
+                )
+            except Exception as e:
+                self.handled.append(f"ack_report_err:{src}")
+                log.warning("cmd=ack nick=%s report_err=%s", src, type(e).__name__)
+            if st == "accepted":
                 self.handled.append(f"ack:{src}:{ack.repo}#{ack.number}")
                 log.info(
-                    "event=ack nick=%s job=%s#%s mode=FR",
+                    "event=ack nick=%s job=%s#%s mode=%s",
                     src,
                     ack.repo,
                     ack.number,
+                    ack.task,
                 )
                 log.info("cmd=ack nick=%s repo=%s#%s", src, ack.repo, ack.number)
             else:
                 self.handled.append(f"ack_no_match:{src}:{ack.repo}#{ack.number}")
+                from .queue import _ack_no_match_logged
+
+                key = f"{src}:{ack.repo}#{ack.number}:{ack.task}"
+                if key not in _ack_no_match_logged:
+                    _ack_no_match_logged.add(key)
+                    log.warning(
+                        "event=ack_no_match nick=%s repo=%s#%s task=%s reason=no_queue_row",
+                        src,
+                        ack.repo,
+                        ack.number,
+                        ack.task,
+                    )
+            return
+        if looks_like_ack(text):
+            # FR #102: never silent-drop a broken ACK line.
+            if bored_gate(self.home, src, target, skip_idle_check=True) == "ok":
+                hint = ack_format_hint()
+                log.warning("event=ack_reject nick=%s reason=bad_format text=%s", src, (text or "")[:80])
+                self._pm(src, hint)
+                self.handled.append(f"ack_reject:{src}")
+            else:
+                self.handled.append(f"ignored_ack_bad_nick:{src}")
             return
         nack = parse_nack(text)
         if nack:
@@ -677,12 +715,69 @@ class JeevesChair:
             log.info("cmd=done nick=%s repo=%s#%s", src, done.repo, done.number)
             return
 
+    def _handle_quit_raw(self, line: str) -> None:
+        """FR #102: on QUIT, release that nick's accepted jobs + workers entry."""
+        # :nick!user@host QUIT :reason
+        raw = (line or "").strip()
+        if " QUIT" not in raw.upper():
+            return
+        if not raw.startswith(":"):
+            return
+        prefix = raw[1:].split(" ", 1)[0]
+        nick = prefix.split("!", 1)[0].strip()
+        if not nick or nick.lower() == (self.nick or "").lower():
+            return
+        from .nicks import is_worker_nick
+
+        if not is_worker_nick(nick):
+            return
+        released = release_worker(self.home, nick, reason="quit")
+        self.handled.append(f"quit_release:{nick}:{len(released)}")
+        log.info("event=quit_release nick=%s released=%s", nick, len(released))
+        try:
+            from .nicks import parse_worker_nick
+
+            parsed = parse_worker_nick(nick)
+            payload = {"op": "delete-worker", "nick": nick}
+            if parsed:
+                payload["machine"] = parsed[0]
+                payload["pid"] = parsed[1]
+            self._post_report(payload)
+        except Exception as e:
+            log.warning("quit_release_report_err nick=%s err=%s", nick, type(e).__name__)
+
+    def _sweep_stale_workers(self) -> None:
+        """Periodic FR #102 stale sweep (default 30m idle)."""
+        now = time.time()
+        if now - float(getattr(self, "_last_stale_sweep", 0.0) or 0.0) < 60.0:
+            return
+        self._last_stale_sweep = now
+        expired = expire_stale_workers(self.home)
+        for nick in expired:
+            self.handled.append(f"stale_release:{nick}")
+            log.info("event=stale_release nick=%s", nick)
+            try:
+                from .nicks import parse_worker_nick
+
+                parsed = parse_worker_nick(nick)
+                payload: dict = {"op": "delete-worker", "nick": nick}
+                if parsed:
+                    payload["machine"] = parsed[0]
+                    payload["pid"] = parsed[1]
+                self._post_report(payload)
+            except Exception:
+                pass
+
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
                 self._drain_outbox()
             except Exception as e:
                 log.warning("drain_outbox_err=%s", type(e).__name__)
+            try:
+                self._sweep_stale_workers()
+            except Exception as e:
+                log.warning("stale_sweep_err=%s", type(e).__name__)
             try:
                 msg = self.client.wait_privmsg(timeout=0.3)
             except OSError:
