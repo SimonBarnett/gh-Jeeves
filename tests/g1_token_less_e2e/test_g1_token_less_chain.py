@@ -105,13 +105,16 @@ def test_g1_token_less_e2e_chain(g1_home: Path):
             status = _post_git(base, "issues", payload)
             assert status == 204
 
-            # wait for Jeeves to drain outbox → #bobiverse
+            # wait for Jeeves to drain outbox → #bobiverse (FR #24 vital-first line)
             deadline = time.time() + 5
             while time.time() < deadline and not any(
-                x.startswith("announce:GIT issues") for x in jeeves.handled
+                x.startswith("announce:GIT ") and "SimonBarnett/gh-Jeeves" in x for x in jeeves.handled
             ):
                 time.sleep(0.05)
-            assert any("GIT issues SimonBarnett/gh-Jeeves opened #1" in x for x in jeeves.handled)
+            ann = next(x for x in jeeves.handled if x.startswith("announce:GIT "))
+            assert "SimonBarnett/gh-Jeeves#1" in ann or "SimonBarnett/gh-Jeeves opened #1" in ann
+            assert "FR" in ann or "issues" in ann
+            assert "opened" in ann
 
             snap = _get_report(base)
             unacc = snap["queue"]["unaccepted"]

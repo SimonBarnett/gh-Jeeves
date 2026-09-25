@@ -48,8 +48,8 @@ def test_announce_line_bounded():
         },
     )
     assert line is not None
-    assert len(line) <= 380
-    assert line.startswith("GIT issues")
+    assert len(line.encode("utf-8")) <= 512  # FR #24 wire budget body+prefix; body alone soft
+    assert line.startswith("GIT ") and ("issues" in line or "FR" in line)
 
 
 def test_process_rejects_secret_field_only():

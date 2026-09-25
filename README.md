@@ -225,6 +225,8 @@ flowchart TD
 | `docs/brief/JEEVES_BRIEF.md` | Vision input (verbatim) |
 | `docs/migration-plan.md` | Extract / cut-over phases |
 | `skills/` | Agent overlay + harvest honesty box |
+| `src/gh_jeeves/announce.py` | FR #24 length-safe GIT/OFFER/list lines (vital-first, byte budget) |
+| `tests/test_announce_length_fr24.py` | FR #24 acceptance (token-less) |
 
 ## License / ownership
 

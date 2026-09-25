@@ -12,7 +12,7 @@ description: >
 
 Execute and record the KEY success metric: GIT announce through to workers
 **without tokens**. G1 is CI-required; G2 is manual post-deploy
-(`docs/migration-plan.md` §16.3).
+(`docs/migration-plan.md` section 16.3).
 
 Agentic control is an overlay: running this skill helps operators; the gate
 itself is script-only and must never require an LLM.
@@ -21,16 +21,20 @@ itself is script-only and must never require an LLM.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q tests/g1_token_less_e2e
+pytest -q tests/
 ```
+
+Includes:
+
+- `tests/g1_token_less_e2e` — local test ircd + stub receiver + scripted worker
+- `tests/test_announce_length_fr24.py` — FR #24 length-safe announce (gate-blocking)
 
 Pass criteria:
 
-- Local test ircd + stub `/bob/v1/git` + `/bob/v1/report` + scripted worker
-- Chain: GitHub event → `GIT …` on `#bobiverse` → queue FR → `!bored` → ear
-  `OFFER` → `ACK` → accepted+busy → `DONE` → done+idle
-- Jeeves never handles `!bored` / never offers
-- Worker nick `{machine}-{pid}` accepted
+- Chain: GitHub event to GIT on #bobiverse to queue FR to !bored to ear OFFER to ACK to DONE
+- Jeeves never handles !bored / never offers
+- Worker nick {machine}-{pid} accepted
+- Announce lines vital-first, byte-budgeted (FR #24); queue from webhook not IRC
 - No-LLM guard: AI env scrubbed; non-loopback TCP blocked
 - Never live IRC / ionos / Ergo
 

@@ -1,12 +1,17 @@
-"""GitHub → GIT announce line + secret-field filter (not whole-payload)."""
+"""GitHub → GIT announce line + secret-field filter (not whole-payload).
+
+FR #24: issues/PR lines use length-safe vital-first formatting (`length_safe`).
+"""
 
 from __future__ import annotations
 
 import re
 from typing import Any
 
+from . import length_safe as ls
 from .queue import Claim, claim_from_payload
 
+# Legacy soft cap for ping/push noise lines (still byte-safe via length_safe for issues/PR).
 MAX_LINE = 380
 
 # Markers that look like secrets — scanned only on secret-bearing fields.
@@ -81,47 +86,41 @@ def payload_secret_rejected(payload: dict) -> str | None:
 
 
 def format_github_webhook_announce(event: str, payload: dict) -> str | None:
+    """Single #bobiverse body line. Issues/PR use FR #24 length-safe vitals."""
     repo = (payload.get("repository") or {}).get("full_name") or "unknown/repo"
-    event = (event or "").lower()
+    event_l = (event or "").lower()
     action = str(payload.get("action") or "")
     actor = str((payload.get("sender") or {}).get("login") or "")
 
-    if event == "ping":
+    if event_l == "ping":
         zen = str(payload.get("zen") or "pong")[:80]
         line = f"GIT ping {repo} {zen}"
-    elif event == "push":
+    elif event_l == "push":
         ref = str(payload.get("ref") or "")
         branch = ref.rsplit("/", 1)[-1] if ref else "unknown"
         sha = str(payload.get("after") or payload.get("head_commit", {}).get("id") or "")[:12]
         commits = payload.get("commits") or []
         n = len(commits) if isinstance(commits, list) else 0
         line = f"GIT push {repo} {branch} {sha} {n} commit(s)"
-    elif event == "issues":
-        issue = payload.get("issue") or {}
-        num = issue.get("number")
-        title = str(issue.get("title") or "")[:120]
-        line = f"GIT issues {repo} {action} #{num} {title}"
-        if actor:
-            line += f" by {actor}"
-    elif event == "pull_request":
-        pr = payload.get("pull_request") or {}
-        num = pr.get("number")
-        title = str(pr.get("title") or "")[:120]
-        extra = action
-        if action == "closed" and pr.get("merged"):
-            extra = "merged"
-        line = f"GIT pull_request {repo} {extra} #{num} {title}"
-        if actor:
-            line += f" by {actor}"
+    elif event_l in ("issues", "pull_request"):
+        res = ls.format_github_announce(event_l, payload)
+        if not res.ok or not res.line:
+            return None
+        line = res.line
+        # optional actor suffix only if it still fits soft budget
+        if actor and " by " not in line:
+            cand = f"{line} by {actor}"
+            if ls.wire_line_bytes(cand) <= ls.IRC_LINE_MAX_BYTES:
+                line = cand
     else:
-        line = f"GIT {event} {repo}"
+        line = f"GIT {event_l} {repo}"
         if action:
             line += f" {action}"
         if actor:
             line += f" by {actor}"
 
     line = re.sub(r"\s+", " ", line).strip()
-    if len(line) > MAX_LINE:
+    if event_l not in ("issues", "pull_request") and len(line) > MAX_LINE:
         line = line[: MAX_LINE - 1] + "…"
     return line
 
