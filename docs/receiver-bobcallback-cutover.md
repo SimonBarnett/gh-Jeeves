@@ -21,6 +21,7 @@ Local machine / ionos only. **Never** edit Ergo or restart unrelated services fr
 4. **Outbox position (FR #71):** agentic_irc used `chair-outbox.txt.pos`; gh-Jeeves uses `chair-outbox.pos`.
    - On first start, if only the legacy file exists, Jeeves **migrates** it to `chair-outbox.pos`.
    - If **neither** pos file exists and `chair-outbox.txt` is non-empty, Jeeves starts at **EOF** (no `#bobiverse` replay flood). Use `--replay-outbox` only when you intentionally want a full drain from offset 0.
+   - **Empty, whitespace-only, non-integer, or negative** pos contents are treated as **missing** (same EOF park when the outbox is non-empty) — never as offset `0` (that would re-flood `#bobiverse`).
    - Do not hand-edit pos unless recovering a known good byte offset.
 5. Start `python -m jeeves receiver` (or combined `python -m jeeves all`) with `--receiver-port 19781`.
 6. Confirm:
