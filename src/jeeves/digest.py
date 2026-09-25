@@ -184,15 +184,36 @@ def coerce_machine(mid: str, raw: Any) -> dict[str, Any]:
 
 
 def coerce_workers(mid: str, raw: Any) -> dict[str, Any]:
+    """Normalize machines.<id>.workers.
+
+    Two shapes coexist:
+    - Ear/TipForm pid keys: ``{"43052": {pid, nick, state, working_on, ...}}``
+    - FR #79 seat nick keys: ``{"flamingo-43052": {job, state, ts}}`` (top-level twin).
+    """
     if not isinstance(raw, dict):
         return {}
     out: dict[str, Any] = {}
-    for pid, ent in raw.items():
-        try:
-            pid_s = str(int(str(pid)))
-        except ValueError:
-            pid_s = str(pid)
+    for key, ent in raw.items():
         e = ent if isinstance(ent, dict) else {}
+        key_s = str(key)
+        # FR #79 nick-keyed seat (job/state/ts)
+        if ("-" in key_s and not key_s.isdigit()) or (
+            "job" in e and "working_on" not in e and not key_s.isdigit()
+        ):
+            out[key_s] = {
+                "state": str(e.get("state") or "idle"),
+                "job": e.get("job"),
+                "ts": str(e.get("ts") or ""),
+            }
+            if e.get("channel") is not None:
+                out[key_s]["channel"] = e.get("channel")
+            if e.get("nick"):
+                out[key_s]["nick"] = e.get("nick")
+            continue
+        try:
+            pid_s = str(int(str(key)))
+        except ValueError:
+            pid_s = key_s
         out[pid_s] = {
             "pid": pid_s,
             "nick": str(e.get("nick") or f"{mid}-{pid_s}"),
@@ -203,6 +224,85 @@ def coerce_workers(mid: str, raw: Any) -> dict[str, Any]:
             "model": str(e.get("model") or ""),
         }
     return out
+
+
+
+# FR #79: log once when nick cannot map to a machine
+_unknown_machine_nicks_logged: set[str] = set()
+
+
+def _log_unknown_worker_machine(nick: str, reason: str) -> None:
+    import logging
+
+    log = logging.getLogger("jeeves.digest")
+    key = f"{nick}:{reason}"
+    if key in _unknown_machine_nicks_logged:
+        return
+    _unknown_machine_nicks_logged.add(key)
+    log.warning("worker_machine_unmapped nick=%s reason=%s", nick, reason)
+
+
+def mirror_top_worker_to_machine(
+    doc: dict[str, Any],
+    nick: str,
+    entry: dict[str, Any] | None,
+    *,
+    remove: bool = False,
+) -> bool:
+    """FR #79: lockstep machines.<machine>.workers[nick] with top-level workers."""
+    from .nicks import parse_worker_nick
+
+    n = (nick or "").strip()
+    if not n:
+        return False
+    parsed = parse_worker_nick(n)
+    if not parsed:
+        _log_unknown_worker_machine(n, "not_worker_nick")
+        return False
+    machine_part, pid = parsed
+    mid = normalize_machine_id(machine_part)
+    if not mid:
+        _log_unknown_worker_machine(n, "empty_machine")
+        return False
+    machines = doc.setdefault("machines", {})
+    if not isinstance(machines, dict):
+        machines = {}
+        doc["machines"] = machines
+    ent = coerce_machine(mid, machines.get(mid))
+    workers = dict(ent.get("workers") or {})
+    if remove or entry is None:
+        workers.pop(n, None)
+        workers.pop(str(pid), None)
+    else:
+        slot = {
+            "state": str(entry.get("state") or "idle"),
+            "job": entry.get("job"),
+            "ts": str(entry.get("ts") or _utc_now()),
+        }
+        if entry.get("channel") is not None:
+            slot["channel"] = entry.get("channel")
+        workers[n] = slot
+        # pid alias for ear-shaped readers
+        workers[str(pid)] = {
+            "pid": str(pid),
+            "nick": n,
+            "state": slot["state"],
+            "working_on": str(slot.get("job") or ""),
+            "job": slot.get("job"),
+            "ts": slot["ts"],
+        }
+    ent["workers"] = workers
+    machines[mid] = coerce_machine(mid, ent)
+    return True
+
+
+def sync_all_top_workers_to_machines(doc: dict[str, Any], top_workers: dict[str, Any] | None) -> None:
+    """GET heal: project top-level workers into machines.*.workers (add/update only)."""
+    if not isinstance(top_workers, dict):
+        return
+    for nick, entry in top_workers.items():
+        if isinstance(entry, dict):
+            mirror_top_worker_to_machine(doc, str(nick), entry, remove=False)
 
 
 def _note_event(doc: dict[str, Any], kind: str, **fields: Any) -> None:
@@ -315,15 +415,18 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
         nick = str(payload.get("nick") or "")
         if nick:
             q = load_queue(home)
-            q.setdefault("workers", {})[nick] = {
+            ent = {
                 "state": str(payload.get("state") or "idle"),
                 "job": payload.get("job"),
                 "ts": payload.get("ts") or _utc_now(),
             }
+            q.setdefault("workers", {})[nick] = ent
             from .queue import save_queue
 
             save_queue(home, q)
             doc["queue"]["workers"] = q["workers"]
+            doc["workers"] = dict(q["workers"])
+            mirror_top_worker_to_machine(doc, nick, ent)
             doc["ts"] = _utc_now()
             save_digest(home, doc)
         return CallbackOutcome(ok=True, changed=bool(nick))
@@ -358,11 +461,13 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
             ]
             q.setdefault("accepted", []).append(row)
         if nick:
-            q.setdefault("workers", {})[nick] = {
+            ent = {
                 "state": str(payload.get("state") or "busy"),
                 "job": payload.get("job"),
                 "ts": payload.get("ts") or _utc_now(),
             }
+            q.setdefault("workers", {})[nick] = ent
+            mirror_top_worker_to_machine(doc, nick, ent)
         save_queue(home, q)
         doc["queue"] = {
             "unaccepted": q.get("unaccepted") or [],
@@ -370,6 +475,7 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
             "done": q.get("done") or [],
             "workers": q.get("workers") or {},
         }
+        doc["workers"] = dict(q.get("workers") or {})
         doc["ts"] = _utc_now()
         save_digest(home, doc)
         return CallbackOutcome(ok=True)
@@ -380,12 +486,16 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
         q = load_queue(home)
         nick = str(payload.get("nick") or "")
         if nick:
-            q.setdefault("workers", {})[nick] = {
+            ent = {
                 "state": "idle",
+                "job": None,
                 "ts": payload.get("ts") or _utc_now(),
             }
+            q.setdefault("workers", {})[nick] = ent
             save_queue(home, q)
             doc["queue"]["workers"] = q["workers"]
+            doc["workers"] = dict(q["workers"])
+            mirror_top_worker_to_machine(doc, nick, ent)
             doc["ts"] = _utc_now()
             save_digest(home, doc)
         return CallbackOutcome(ok=True, changed=bool(nick))
@@ -404,19 +514,36 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
     if op == "delete-worker":
         mid = normalize_machine_id(str(payload.get("machine") or payload.get("id") or ""))
         pid = str(payload.get("pid") or "")
-        if not mid or not pid:
+        nick = str(payload.get("nick") or "")
+        if not mid or not (pid or nick):
             return CallbackOutcome(ok=False, err="bad delete")
+        from .queue import load_queue, save_queue
+
+        if not nick and pid:
+            nick = f"{mid}-{pid}"
         ent = coerce_machine(mid, doc["machines"].get(mid))
         workers = dict(ent.get("workers") or {})
-        workers.pop(str(pid), None)
-        try:
-            workers.pop(str(int(pid)), None)
-        except ValueError:
-            pass
+        if pid:
+            workers.pop(str(pid), None)
+            try:
+                workers.pop(str(int(pid)), None)
+            except ValueError:
+                pass
+            workers.pop(f"{mid}-{pid}", None)
+        if nick:
+            workers.pop(nick, None)
+            mirror_top_worker_to_machine(doc, nick, None, remove=True)
+            q = load_queue(home)
+            qw = dict(q.get("workers") or {})
+            qw.pop(nick, None)
+            q["workers"] = qw
+            save_queue(home, q)
+            doc["queue"]["workers"] = qw
+            doc["workers"] = dict(qw)
         ent["workers"] = workers
-        doc["machines"][mid] = ent
+        doc["machines"][mid] = coerce_machine(mid, ent)
         doc["ts"] = _utc_now()
-        _note_event(doc, "delete-worker", machine=mid, pid=pid)
+        _note_event(doc, "delete-worker", machine=mid, pid=pid or nick)
         save_digest(home, doc)
         return CallbackOutcome(ok=True, actions=["delete-worker"])
 
@@ -451,7 +578,10 @@ def public_digest_snapshot(home: Path, *, queue_home: Path | None = None) -> dic
             "workers": dict(q.get("workers") or {}),
         }
         # also top-level workers for older readers
-        doc["workers"] = dict(q.get("workers") or {})
+        tw = dict(q.get("workers") or {})
+        doc["workers"] = tw
+        # FR #79: heal machines.<id>.workers so TipForm is not empty while top is busy
+        sync_all_top_workers_to_machines(doc, tw)
     except Exception:
         pass
     # FR #68: additive focus list (trays may ignore unknown keys)
