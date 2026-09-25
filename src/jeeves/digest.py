@@ -196,13 +196,18 @@ def coerce_workers(mid: str, raw: Any) -> dict[str, Any]:
     for key, ent in raw.items():
         e = ent if isinstance(ent, dict) else {}
         key_s = str(key)
-        # FR #79 nick-keyed seat (job/state/ts)
+        # FR #79 / K12 nick-keyed seat (job + working_on for TipForm)
         if ("-" in key_s and not key_s.isdigit()) or (
             "job" in e and "working_on" not in e and not key_s.isdigit()
         ):
+            job = e.get("job")
+            if job is None:
+                job = e.get("working_on")
+            state = str(e.get("state") or "idle")
             out[key_s] = {
-                "state": str(e.get("state") or "idle"),
-                "job": e.get("job"),
+                "state": state,
+                "job": job,
+                "working_on": str(job or "") if state.lower() == "busy" else str(e.get("working_on") or ""),
                 "ts": str(e.get("ts") or ""),
             }
             if e.get("channel") is not None:
@@ -242,6 +247,35 @@ def _log_unknown_worker_machine(nick: str, reason: str) -> None:
     log.warning("worker_machine_unmapped nick=%s reason=%s", nick, reason)
 
 
+def _refresh_machine_working_on(ent: dict[str, Any]) -> None:
+    """K12 / FR #13: TipForm reads machines.<id>.working_on for START tiles.
+
+    Prefer the newest busy worker's job/working_on; clear when none are busy.
+    """
+    workers = ent.get("workers") or {}
+    if not isinstance(workers, dict):
+        ent["working_on"] = ""
+        return
+    best_job = ""
+    best_ts = ""
+    for key, slot in workers.items():
+        if not isinstance(slot, dict):
+            continue
+        # Skip pid aliases when the nick twin exists (same job twice).
+        if str(key).isdigit() and str(slot.get("nick") or "") in workers:
+            continue
+        if str(slot.get("state") or "").lower() != "busy":
+            continue
+        job = str(slot.get("job") or slot.get("working_on") or "").strip()
+        if not job:
+            continue
+        ts = str(slot.get("ts") or "")
+        if not best_job or ts >= best_ts:
+            best_job = job
+            best_ts = ts
+    ent["working_on"] = best_job
+
+
 def mirror_top_worker_to_machine(
     doc: dict[str, Any],
     nick: str,
@@ -249,7 +283,11 @@ def mirror_top_worker_to_machine(
     *,
     remove: bool = False,
 ) -> bool:
-    """FR #79: lockstep machines.<machine>.workers[nick] with top-level workers."""
+    """FR #79: lockstep machines.<machine>.workers[nick] with top-level workers.
+
+    FR #13 / K12: also refresh machines.<id>.working_on so TipForm shows busy
+    while hidden seat runs look idle in the TUI.
+    """
     from .nicks import parse_worker_nick
 
     n = (nick or "").strip()
@@ -274,9 +312,14 @@ def mirror_top_worker_to_machine(
         workers.pop(n, None)
         workers.pop(str(pid), None)
     else:
+        job = entry.get("job")
+        if job is None:
+            job = entry.get("working_on")
+        state = str(entry.get("state") or "idle")
         slot = {
-            "state": str(entry.get("state") or "idle"),
-            "job": entry.get("job"),
+            "state": state,
+            "job": job,
+            "working_on": str(job or "") if state.lower() == "busy" else "",
             "ts": str(entry.get("ts") or _utc_now()),
         }
         if entry.get("channel") is not None:
@@ -287,11 +330,12 @@ def mirror_top_worker_to_machine(
             "pid": str(pid),
             "nick": n,
             "state": slot["state"],
-            "working_on": str(slot.get("job") or ""),
+            "working_on": slot["working_on"],
             "job": slot.get("job"),
             "ts": slot["ts"],
         }
     ent["workers"] = workers
+    _refresh_machine_working_on(ent)
     machines[mid] = coerce_machine(mid, ent)
     return True
 
