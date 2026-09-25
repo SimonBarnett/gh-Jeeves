@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from .focus import focus_label_for_repo, sort_unaccepted_rows
 from .ignore import filter_rows_not_ignored
 from .queue import load_queue
 
@@ -71,10 +72,12 @@ def format_list_line(
     *,
     line_max: int = LIST_LINE_MAX,
     index: int | None = None,
+    focus_tag: str | None = None,
 ) -> str:
     """
     Wire format (FR #50): ``<MODE> <owner/repo>#<n> <title>``
     MODE is FR|MRB|UAT (task). Optional leading ``N.`` for multi-line lists.
+    FR #68: optional ``[high|medium|low|n]`` after MODE when focused by name/number.
     """
     task = str(row.get("task") or "?").upper()
     repo = str(row.get("repo") or "?").strip()
@@ -84,7 +87,8 @@ def format_list_line(
     ref = f"{repo}#{num}"
     title = str(row.get("line") or row.get("title") or "").replace("\n", " ").strip()
     prefix = f"{index}. " if index is not None else ""
-    head = f"{prefix}{task} {ref}"
+    tag = f" [{focus_tag}]" if focus_tag else ""
+    head = f"{prefix}{task}{tag} {ref}"
     budget = max(8, int(line_max) - len(head.encode("utf-8")) - (1 if title else 0))
     if title:
         title = _clip_utf8(title, budget)
@@ -115,8 +119,6 @@ def format_unaccepted_list(
     doc = load_queue(home)
     unacc = list(doc.get("unaccepted") or [])
     acc = list(doc.get("accepted") or [])
-    unacc.sort(key=lambda r: int(r.get("seq") or 0))
-    acc.sort(key=lambda r: int(r.get("seq") or 0))
 
     if list_all:
         # mark accepted for clarity in title if missing
@@ -131,8 +133,10 @@ def format_unaccepted_list(
     else:
         rows = unacc
 
-    # FR #75 / !focus: ignored repos never appear in !list regardless of priority.
+    # FR #75: ignored repos never appear in !list regardless of focus priority.
     rows = filter_rows_not_ignored(home, rows)
+    # FR #68: one sort for !list and !bored
+    rows = sort_unaccepted_rows(home, rows)
 
     if task_filter:
         tf = task_filter.upper()
@@ -157,7 +161,15 @@ def format_unaccepted_list(
         kind = "jobs" if list_all else "unaccepted"
         out.append(f"{total} {kind} (showing {len(show)})")
     for i, row in enumerate(show, start=1):
-        out.append(format_list_line(row, line_max=line_max, index=i if total > 1 else None))
+        tag = focus_label_for_repo(home, str(row.get("repo") or ""))
+        out.append(
+            format_list_line(
+                row,
+                line_max=line_max,
+                index=i if total > 1 else None,
+                focus_tag=tag,
+            )
+        )
     more = total - len(show)
     if more > 0:
         hint = "!list all" if not list_all else "!list <repo> to filter"

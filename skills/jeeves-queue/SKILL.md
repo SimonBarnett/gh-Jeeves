@@ -19,4 +19,8 @@ Persists as `ignored.json` next to `queue.json`. Ignored repos are dropped from
 announce, queue, `!list`, and ear offers. Purge on ignore; unignore is new
 events only. Dry-run before hand-editing `ignored.json`.
 
+**Focus (FR #68):** `!focus [n|high|medium|low] {repo}` / `!unfocus {repo}|all`
+(simon account). `focus.json` beside queue. One sort for `!list` and ear
+`top_unaccepted` (!bored). Ignored still wins over focus.
+
 Agentic control is an overlay: the token-less path must never depend on this skill.

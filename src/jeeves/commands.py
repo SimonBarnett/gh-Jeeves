@@ -125,6 +125,29 @@ def _reg() -> tuple[CommandSpec, ...]:
             ),
             related=("ignore", "ignored", "resync"),
         ),
+        CommandSpec(
+            name="focus",
+            syntax="!focus [n|high|medium|low] {repo}",
+            summary="priority-sort !list and !bored offers (simon account)",
+            roles=frozenset({ROLE_SIMON}),
+            example="!focus high SimonBarnett/gh-Jeeves",
+            details=(
+                "FR #68: persists focus.json beside queue.json. Lower number first "
+                "(high=1, medium=5, low=9). Bare !focus lists; bare !focus {repo} = high. "
+                "Same sort for !list and ear top_unaccepted. Ignored repos stay hidden. "
+                "PM only. Simon services account (like !sweep)."
+            ),
+            related=("unfocus", "list"),
+        ),
+        CommandSpec(
+            name="unfocus",
+            syntax="!unfocus {repo}|all",
+            summary="remove a repo from focus or clear all (simon account)",
+            roles=frozenset({ROLE_SIMON}),
+            example="!unfocus all",
+            details="FR #68: drops focus entries; queue order returns to seq-only for those repos.",
+            related=("focus", "list"),
+        ),
     )
 
 

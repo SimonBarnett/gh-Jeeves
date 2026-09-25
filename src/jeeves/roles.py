@@ -31,6 +31,13 @@ from .cast_iron import (
 )
 from .outbox_pos import outbox_path, resolve_outbox_start, write_pos
 from .helpcmd import HelpRateLimit, build_help, parse_help
+from .focus import (
+    handle_focus_cmd,
+    handle_unfocus_cmd,
+    may_mutate_focus,
+    parse_focus_cmd,
+    parse_unfocus_cmd,
+)
 from .ignore import (
     format_ignored_lines,
     handle_ignore_add,
@@ -43,6 +50,7 @@ from .ignore import (
 from .listfmt import FLOOD_S, format_unaccepted_list, list_rate_notice, list_rate_ok
 from .wire import (
     is_bored,
+    is_focus,
     is_help,
     is_ignore,
     is_ignored_list,
@@ -50,6 +58,7 @@ from .wire import (
     is_resync,
     is_status,
     is_sweep,
+    is_unfocus,
     is_unignore,
     parse_ack,
     parse_done,
@@ -455,6 +464,46 @@ class JeevesChair:
             return acct == "simon"
         return False
 
+    def _focus_mutator_ok(self, src: str) -> bool:
+        """FR #68: simon only; services account when mode_grants live."""
+        live = self.mode_grants is not None
+        acct = self._simon_account() if live else None
+        return may_mutate_focus(src, account=acct, mode_grants_live=live)
+
+    def _handle_focus_cmds(self, src: str, text: str) -> bool:
+        """FR #68: !focus / !unfocus — PM only."""
+        if is_focus(text) or parse_focus_cmd(text) is not None:
+            arg = parse_focus_cmd(text)
+            if arg is None:
+                arg = ""
+            if not self._focus_mutator_ok(src):
+                self._pm(src, "focus: denied (simon account required)")
+                self.handled.append(f"focus_denied:{src}")
+                log.info("cmd=focus nick=%s denied", src)
+                return True
+            lines = handle_focus_cmd(self.home, arg)
+            for line in lines:
+                self._pm(src, line)
+            self.handled.append(f"focus:{src}:{arg or '*'}")
+            log.info("cmd=focus nick=%s replies=%s", src, len(lines))
+            return True
+        if is_unfocus(text) or parse_unfocus_cmd(text) is not None:
+            arg = parse_unfocus_cmd(text)
+            if arg is None:
+                arg = ""
+            if not self._focus_mutator_ok(src):
+                self._pm(src, "unfocus: denied (simon account required)")
+                self.handled.append(f"unfocus_denied:{src}")
+                log.info("cmd=unfocus nick=%s denied", src)
+                return True
+            lines = handle_unfocus_cmd(self.home, arg)
+            for line in lines:
+                self._pm(src, line)
+            self.handled.append(f"unfocus:{src}:{arg or '*'}")
+            log.info("cmd=unfocus nick=%s replies=%s", src, len(lines))
+            return True
+        return False
+
     def _handle_shop(self, src: str, target: str, text: str) -> None:
         # !help from channel or PM → reply by PM only (no channel flood)
         if is_help(text) or parse_help(text)[0]:
@@ -469,6 +518,8 @@ class JeevesChair:
         if is_resync(text):
             self._handle_resync(src)
             return
+        if self._handle_focus_cmds(src, text):
+            return
         if self._handle_ignore_cmds(src, text):
             return
         if is_sweep(text):
@@ -481,6 +532,8 @@ class JeevesChair:
                 self._handle_status(src)
             elif is_resync(text):
                 self._handle_resync(src)
+            elif self._handle_focus_cmds(src, text):
+                return
             elif self._handle_ignore_cmds(src, text):
                 return
             return
