@@ -5,16 +5,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+# Allow optional trailing punctuation; number may be #n or n.
 _ACK = re.compile(
-    r"^ACK\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\s*$",
+    r"^ACK\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)\s*$",
     re.I,
 )
 _DONE = re.compile(
-    r"^DONE\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)(?:\s+(\S+))?(?:\s+(\S+))?\s*$",
+    r"^DONE\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)(?:\s+(\S+))?(?:\s+(\S+))?\s*$",
     re.I,
 )
 _NACK = re.compile(
-    r"^(NACK|GIVEUP)\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\s*$",
+    r"^(NACK|GIVEUP)\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)\s*$",
     re.I,
 )
 # !bored / !BORED / optional trailing junk stripped — ear owns this command.
