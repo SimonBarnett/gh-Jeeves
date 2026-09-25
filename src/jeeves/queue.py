@@ -13,21 +13,24 @@ QUEUE_VERSION = 1
 ACCEPTED_CAP = 200
 DONE_CAP = 200
 
+# agentic_irc #207-compatible closes grammar (Closes/Fixes/Resolves/Refs #n).
 _CLOSES_RE = re.compile(
-    r"(?:close[sd]?|fix[sd]?|resolve[sd]?)\s+#(\d+)",
-    re.I,
+    r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s+#(\d+)\b",
 )
 
 
 @dataclass(frozen=True)
 class Claim:
     repo: str
-    task: str  # FR | MRB | UAT
-    id: str  # #n
+    task: str  # FR | MRB | UAT | CLOSE | RESTORE_FR
+    id: str  # #n (issue or PR number for the claim row)
     event: str = ""
     action: str = ""
     line: str = ""
     url: str = ""
+    refs: tuple[str, ...] = ()  # linked issue ids e.g. ("#19",) when PR supersedes FR
+    pr_id: str = ""  # pull request #n when claim is about a PR (MRB/UAT/RESTORE)
+    merged: bool | None = None
 
     @property
     def key(self) -> str:
@@ -92,7 +95,7 @@ def extract_closes_issue_ids(*texts: str) -> tuple[str, ...]:
 
 
 def claim_from_payload(event: str, payload: dict) -> Claim | None:
-    """Map GitHub webhook event → queue claim (FR/MRB/UAT)."""
+    """Map GitHub webhook event → queue claim (FR/MRB/UAT). K4 / #207 supersede fields."""
     repo_obj = payload.get("repository") or {}
     full = repo_obj.get("full_name") or ""
     if not full and repo_obj.get("name"):
@@ -110,11 +113,28 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
             return None
         ident = f"#{int(num)}"
         title = str(issue.get("title") or "")[:120]
+        body = str(issue.get("body") or "")
         url = str(issue.get("html_url") or "")
         if action in ("opened", "reopened"):
-            return Claim(repo=full, task="FR", id=ident, event=event, action=action, line=title, url=url)
+            return Claim(
+                repo=full,
+                task="FR",
+                id=ident,
+                event=event,
+                action=action,
+                line=title,
+                url=url,
+            )
         if action == "closed":
-            return Claim(repo=full, task="CLOSE", id=ident, event=event, action=action, line=title, url=url)
+            return Claim(
+                repo=full,
+                task="CLOSE",
+                id=ident,
+                event=event,
+                action=action,
+                line=title,
+                url=url,
+            )
         return None
 
     if event == "pull_request":
@@ -127,23 +147,52 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
         url = str(pr.get("html_url") or "")
         body = str(pr.get("body") or "")
         merged = bool(pr.get("merged"))
-        if action in ("opened", "ready_for_review", "reopened"):
-            return Claim(repo=full, task="MRB", id=ident, event=event, action=action, line=title, url=url)
+        refs = extract_closes_issue_ids(title, body)
+        # Keep closes text in line so apply_queue_event can re-extract if needed.
+        line = title
+        if refs:
+            line = f"{title} " + " ".join(f"Closes {r}" for r in refs)
+        if action in ("opened", "ready_for_review", "reopened", "synchronize"):
+            return Claim(
+                repo=full,
+                task="MRB",
+                id=ident,
+                event=event,
+                action=action,
+                line=line,
+                url=url,
+                refs=refs,
+                pr_id=ident,
+                merged=None,
+            )
         if action == "closed" and merged:
-            # MRB PASS path → UAT of linked FR if closes #n present
-            closes = extract_closes_issue_ids(title, body)
-            fr_id = closes[0] if closes else ident
+            # K4: MRB PASS → drop MRB (pr_id), UAT for each linked FR (or PR id if none).
+            uat_id = refs[0] if refs else ident
             return Claim(
                 repo=full,
                 task="UAT",
-                id=fr_id if closes else ident,
+                id=uat_id,
                 event=event,
                 action="merged",
-                line=title,
+                line=line,
                 url=url,
+                refs=refs if refs else (ident,),
+                pr_id=ident,
+                merged=True,
             )
         if action == "closed" and not merged:
-            return Claim(repo=full, task="RESTORE_FR", id=ident, event=event, action=action, line=title, url=url)
+            return Claim(
+                repo=full,
+                task="RESTORE_FR",
+                id=ident,
+                event=event,
+                action=action,
+                line=line,
+                url=url,
+                refs=refs,
+                pr_id=ident,
+                merged=False,
+            )
         return None
 
     return None
@@ -163,7 +212,7 @@ def _remove_matching(rows: list[dict], pred) -> int:
     return before - len(rows)
 
 
-def _append_unaccepted(doc: dict, claim: Claim, **extra: str) -> None:
+def _append_unaccepted(doc: dict, claim: Claim, **extra: Any) -> None:
     row = {
         "repo": claim.repo,
         "task": claim.task,
@@ -175,6 +224,12 @@ def _append_unaccepted(doc: dict, claim: Claim, **extra: str) -> None:
         "url": claim.url,
         "seq": int(time.time() * 1000),
     }
+    if claim.refs:
+        row["refs"] = list(claim.refs)
+    if claim.pr_id:
+        row["pr_id"] = claim.pr_id
+    if claim.merged is not None:
+        row["merged"] = claim.merged
     row.update({k: v for k, v in extra.items() if v is not None})
     # de-dupe same key
     _remove_matching(
@@ -184,79 +239,141 @@ def _append_unaccepted(doc: dict, claim: Claim, **extra: str) -> None:
     doc["unaccepted"].append(row)
 
 
+def _linked_ids(claim: Claim) -> tuple[str, ...]:
+    refs = claim.refs or extract_closes_issue_ids(claim.line)
+    return tuple(refs)
+
+
+def _remove_tasks_for_ids(
+    doc: dict,
+    repo: str,
+    idents: tuple[str, ...],
+    tasks: set[str],
+    *,
+    buckets: tuple[str, ...] = ("unaccepted", "accepted"),
+) -> int:
+    n = 0
+    idset = {_norm_ident(i) for i in idents if i}
+    taskset = {t.upper() for t in tasks}
+    for bucket in buckets:
+        n += _remove_matching(
+            doc[bucket],
+            lambda r, _repo=repo, _ids=idset, _ts=taskset: (
+                str(r.get("repo") or "") == _repo
+                and str(r.get("task") or "").upper() in _ts
+                and _norm_ident(str(r.get("id") or "")) in _ids
+            ),
+        )
+        # also drop MRB rows whose pr_id matches
+        n += _remove_matching(
+            doc[bucket],
+            lambda r, _repo=repo, _ids=idset, _ts=taskset: (
+                str(r.get("repo") or "") == _repo
+                and str(r.get("task") or "").upper() in _ts
+                and _norm_ident(str(r.get("pr_id") or "")) in _ids
+            ),
+        )
+    return n
+
+
 def apply_queue_event(home: Path, claim: Claim) -> str:
-    """Apply supersede rules; return action tag for tests/logs."""
+    """Apply supersede rules (K4 / agentic_irc #207); return action tag."""
     doc = load_queue(home)
-    repo, task, ident = claim.repo, claim.task, claim.id
+    repo, task, ident = claim.repo, claim.task, _norm_ident(claim.id)
+    pr_id = _norm_ident(claim.pr_id or (ident if task in ("MRB", "RESTORE_FR") else ""))
+    links = _linked_ids(claim)
 
     if task == "CLOSE":
-        n = 0
-        for bucket in ("unaccepted", "accepted"):
-            n += _remove_matching(
-                doc[bucket],
-                lambda r, _id=ident, _repo=repo: str(r.get("repo")) == _repo and str(r.get("id")) == _id,
-            )
+        # Issue closed: drop FR/MRB/UAT for this issue id (and PR rows that only tracked it).
+        n = _remove_tasks_for_ids(doc, repo, (ident,), {"FR", "MRB", "UAT", "PR", "FIX"})
         save_queue(home, doc)
         return f"removed:{n}"
 
     if task == "FR":
-        # remove stale CLOSE nothing; add FR; drop prior FR same id
+        # Reopened/opened FR: drop stale UAT/PR for same id; enqueue FR (idempotent).
+        _remove_tasks_for_ids(doc, repo, (ident,), {"UAT", "PR"})
+        # de-dupe prior FR same id
         _remove_matching(
             doc["unaccepted"],
-            lambda r: str(r.get("repo")) == repo and str(r.get("id")) == ident and str(r.get("task")) in ("FR", "MRB", "UAT"),
+            lambda r: str(r.get("repo")) == repo
+            and _norm_ident(str(r.get("id") or "")) == ident
+            and str(r.get("task") or "").upper() == "FR",
         )
         _append_unaccepted(doc, claim)
         save_queue(home, doc)
         return "enqueued:FR"
 
     if task == "MRB":
-        # FR+PR → MRB supersedes FR for linked issues in title/body already in claim.line
-        closes = extract_closes_issue_ids(claim.line)
-        for fr in closes:
-            _remove_matching(
-                doc["unaccepted"],
-                lambda r, _fr=fr: str(r.get("repo")) == repo and str(r.get("id")) == _fr and str(r.get("task")) == "FR",
-            )
-        # also supersede any FR that matches repo if PR body stored elsewhere — caller may pass linked
-        _remove_matching(
-            doc["unaccepted"],
-            lambda r: _same(r, repo, "MRB", ident),
-        )
+        # PR opened: supersede linked FRs (and UAT leftovers); enqueue MRB once.
+        for fr in links:
+            _remove_tasks_for_ids(doc, repo, (fr,), {"FR", "PR", "UAT"})
+        # drop prior MRB same PR id
+        _remove_tasks_for_ids(doc, repo, (ident, pr_id or ident), {"MRB"})
         _append_unaccepted(doc, claim)
         save_queue(home, doc)
         return "enqueued:MRB"
 
     if task == "UAT":
-        # remove MRB for this PR / FR
-        _remove_matching(
-            doc["unaccepted"],
-            lambda r: str(r.get("repo")) == repo
-            and str(r.get("task")) in ("MRB", "FR", "UAT")
-            and str(r.get("id")) in (ident, claim.id),
-        )
+        # K4: merged PR — remove the MRB row for this PR (not just FR id), then UAT linked FRs.
+        pr = pr_id or ident
+        _remove_tasks_for_ids(doc, repo, (pr,), {"MRB"})
+        # drop accepted MRB for this PR so workers don't stay on merged work
         _remove_matching(
             doc["accepted"],
-            lambda r: str(r.get("repo")) == repo and str(r.get("id")) == ident,
+            lambda r: str(r.get("repo")) == repo
+            and str(r.get("task") or "").upper() == "MRB"
+            and (
+                _norm_ident(str(r.get("id") or "")) == pr
+                or _norm_ident(str(r.get("pr_id") or "")) == pr
+            ),
         )
-        _append_unaccepted(doc, claim)
+        uat_targets = links if links else (ident,)
+        for fr in uat_targets:
+            _remove_tasks_for_ids(doc, repo, (fr,), {"FR", "UAT", "PR"})
+            _append_unaccepted(
+                doc,
+                Claim(
+                    repo=repo,
+                    task="UAT",
+                    id=_norm_ident(fr),
+                    event=claim.event,
+                    action="merged",
+                    line=claim.line,
+                    url=claim.url,
+                    refs=(_norm_ident(fr),),
+                    pr_id=pr,
+                    merged=True,
+                ),
+            )
         save_queue(home, doc)
         return "enqueued:UAT"
 
     if task == "RESTORE_FR":
-        # PR closed unmerged: drop MRB, restore FR if we know linked id from line
-        _remove_matching(
-            doc["unaccepted"],
-            lambda r: _same(r, repo, "MRB", ident),
-        )
+        # PR closed unmerged: drop MRB for this PR; restore linked FRs.
+        pr = pr_id or ident
+        _remove_tasks_for_ids(doc, repo, (pr,), {"MRB"})
         _remove_matching(
             doc["accepted"],
-            lambda r: _same(r, repo, "MRB", ident),
+            lambda r: str(r.get("repo")) == repo
+            and str(r.get("task") or "").upper() == "MRB"
+            and (
+                _norm_ident(str(r.get("id") or "")) == pr
+                or _norm_ident(str(r.get("pr_id") or "")) == pr
+            ),
         )
-        closes = extract_closes_issue_ids(claim.line)
-        for fr in closes or ():
+        restores = links if links else ()
+        for fr in restores:
             _append_unaccepted(
                 doc,
-                Claim(repo=repo, task="FR", id=fr, event=claim.event, action="restore", line=claim.line, url=claim.url),
+                Claim(
+                    repo=repo,
+                    task="FR",
+                    id=_norm_ident(fr),
+                    event=claim.event,
+                    action="restore",
+                    line=claim.line,
+                    url=claim.url,
+                ),
             )
         save_queue(home, doc)
         return "restored:FR"
@@ -264,6 +381,10 @@ def apply_queue_event(home: Path, claim: Claim) -> str:
     _append_unaccepted(doc, claim)
     save_queue(home, doc)
     return f"enqueued:{task}"
+
+
+def unaccepted_tasks(home: Path) -> list[dict]:
+    return list(load_queue(home).get("unaccepted") or [])
 
 
 def top_unaccepted(home: Path) -> dict | None:
