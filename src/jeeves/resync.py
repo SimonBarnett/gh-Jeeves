@@ -7,6 +7,7 @@ queue.json, keep live accepted workers, quiet when unchanged.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+log = logging.getLogger("jeeves.resync")
 
 from .length_safe import VitalFields, format_announce, prepare_send
 from .queue import (
@@ -462,6 +465,7 @@ def run_resync(
     """
     cfg = cfg or ResyncConfig()
     home = Path(home)
+    log.info("event=resync phase=start")
     try:
         desired = build_outstanding(client, cfg, home=home)
     except (URLError, HTTPError, OSError, TimeoutError) as exc:
@@ -474,6 +478,11 @@ def run_resync(
         log_path = home / "resync.log"
         prev = log_path.read_text(encoding="utf-8") if log_path.is_file() else ""
         log_path.write_text(prev + f"\n{time.time()} github-down {exc!r}\n", encoding="utf-8")
+        log.info(
+            "event=resync phase=end result=github_down total=%s err=%s",
+            total,
+            type(exc).__name__,
+        )
         return stats
 
     before = load_queue(home)
@@ -513,6 +522,15 @@ def run_resync(
     if outbox_append and not (quiet_when_unchanged and stats.quiet):
         outbox_append(line)
 
+    log.info(
+        "event=resync phase=end result=ok quiet=%s added=%s removed=%s retyped=%s total=%s",
+        int(bool(stats.quiet)),
+        stats.added,
+        stats.removed,
+        stats.retyped,
+        total,
+    )
+
     return stats
 
 
@@ -544,6 +562,12 @@ class ResyncScheduler:
         self.runs = 0
 
     def run_once(self) -> DiffStats:
+        import logging
+
+        from .service_log import event as slog
+
+        log = logging.getLogger("jeeves.resync")
+        slog(log, "resync_start", run=self.runs + 1)
         self.last = run_resync(
             self.home,
             self.client,
@@ -552,6 +576,17 @@ class ResyncScheduler:
             outbox_append=self.outbox_append,
         )
         self.runs += 1
+        st = self.last
+        slog(
+            log,
+            "resync_end",
+            run=self.runs,
+            added=getattr(st, "added", 0),
+            removed=getattr(st, "removed", 0),
+            retyped=getattr(st, "retyped", 0),
+            total=getattr(st, "total", 0),
+            skipped=getattr(st, "skipped", False),
+        )
         return self.last
 
     def start(self, *, run_immediately: bool = True) -> None:
