@@ -20,7 +20,8 @@ _NACK = re.compile(
 )
 # !bored / !BORED / optional trailing junk stripped — ear owns this command.
 _BORED = re.compile(r"^!+\s*bored\b", re.I)
-_LIST = re.compile(r"^!list\s*$", re.I)
+_LIST = re.compile(r"^!list(?:\s+\S+)?\s*$", re.I)
+_HELP = re.compile(r"^!+\s*help(?:\s+\S+)?\s*$", re.I)
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,10 @@ def is_bored(body: str) -> bool:
 
 def is_list(body: str) -> bool:
     return bool(_LIST.match((body or "").strip()))
+
+
+def is_help(body: str) -> bool:
+    return bool(_HELP.match((body or "").strip()))
 
 
 def parse_ack(body: str) -> AckMsg | None:
