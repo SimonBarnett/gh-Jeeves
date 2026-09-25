@@ -401,3 +401,134 @@ def test_save_digest_retries_permission_error(tmp_path: Path):
         save_digest(home, doc, retries=5, backoff_s=0.01)
     assert path.is_file()
     assert calls["n"] == 3
+
+
+def test_save_digest_raises_after_retries_exhausted(tmp_path: Path):
+    home = tmp_path / "d"
+    home.mkdir()
+    doc = empty_digest()
+
+    def always_fail(self, target):  # type: ignore[no-untyped-def]
+        raise PermissionError(5, "Access is denied")
+
+    with mock.patch.object(Path, "replace", always_fail):
+        with pytest.raises(PermissionError):
+            save_digest(home, doc, retries=3, backoff_s=0.001)
+
+
+def test_tls_privmsg_pace_false_does_not_sleep():
+    """Double-pace was the freeze: flood queue sleeps once; privmsg(pace=False) must not."""
+    from jeeves.tls_irc import TlsIrcClient
+
+    sleeps: list[float] = []
+
+    class _Sock:
+        def sendall(self, data: bytes) -> None:
+            return None
+
+    tls = TlsIrcClient.__new__(TlsIrcClient)
+    tls.flood_s = 0.8
+    tls._lock = __import__("threading").Lock()
+    tls.sock = _Sock()  # type: ignore[assignment]
+    with mock.patch("jeeves.tls_irc.time.sleep", side_effect=lambda s: sleeps.append(s)):
+        tls.privmsg("nick", "hello", pace=False)
+        tls.privmsg("nick", "world", pace=True)
+    assert sleeps == [0.8]
+
+
+def test_flood_queue_send_error_counted():
+    def boom(t: str, x: str) -> None:
+        raise OSError("send fail")
+
+    q = OutboundFloodQueue(boom, flood_s=0.0)
+    q.start()
+    try:
+        q.put("n", "x")
+        deadline = time.time() + 2
+        while q.errors < 1 and time.time() < deadline:
+            time.sleep(0.02)
+        assert q.errors == 1
+        assert q.sent == 0
+    finally:
+        q.stop()
+
+
+def test_resync_nosched_pm(tmp_path: Path):
+    home = tmp_path / "d"
+    home.mkdir()
+    ircd = LocalIrcd()
+    port = ircd.start()
+    rx = StubReceiver(home)
+    rport = rx.start()
+    chair = JeevesChair(
+        "127.0.0.1",
+        port,
+        home,
+        f"http://127.0.0.1:{rport}",
+        shops=["#bobiverse"],
+        auto_join=False,
+        resync_scheduler=None,
+    )
+    chair._outbox.flood_s = 0.0
+    chair.start()
+    time.sleep(0.1)
+    try:
+        bob = IrcClient("127.0.0.1", port, "bob-flamingo")
+        bob.privmsg("Jeeves", "!resync")
+        deadline = time.time() + 3
+        while time.time() < deadline and not any(
+            h.startswith("resync_nosched:") for h in chair.handled
+        ):
+            time.sleep(0.05)
+        assert any(h == "resync_nosched:bob-flamingo" for h in chair.handled), chair.handled
+        assert any("unavailable" in t.lower() for _, t in chair.pm_egress)
+    finally:
+        chair.stop()
+        bob.close()
+        rx.stop()
+        ircd.stop()
+
+
+def test_handle_list_returns_immediately_while_queue_pending(tmp_path: Path, monkeypatch):
+    """_handle_list must not sleep; pending PMs sit on the flood queue."""
+    monkeypatch.setattr("jeeves.roles.FLOOD_S", 0.5)
+    monkeypatch.setattr("jeeves.listfmt.FLOOD_S", 0.5)
+    reset_list_rate()
+    home = tmp_path / "d"
+    home.mkdir()
+    save_queue(
+        home,
+        {
+            "v": 1,
+            "unaccepted": [_row(i) for i in range(1, 21)],
+            "accepted": [],
+            "done": [],
+            "workers": {},
+        },
+    )
+    ircd = LocalIrcd()
+    port = ircd.start()
+    rx = StubReceiver(home)
+    rport = rx.start()
+    chair = JeevesChair(
+        "127.0.0.1",
+        port,
+        home,
+        f"http://127.0.0.1:{rport}",
+        shops=["#bobiverse"],
+        auto_join=False,
+    )
+    chair._outbox.flood_s = 0.5
+    chair.start()
+    time.sleep(0.05)
+    try:
+        t0 = time.time()
+        chair._handle_list("alice", "!list all")
+        elapsed = time.time() - t0
+        assert elapsed < 0.4, f"_handle_list blocked {elapsed:.2f}s"
+        assert any(h.startswith("list_pm:alice:") for h in chair.handled)
+        assert chair._outbox.pending() >= 1 or chair._outbox.sent >= 1
+    finally:
+        chair.stop()
+        rx.stop()
+        ircd.stop()
