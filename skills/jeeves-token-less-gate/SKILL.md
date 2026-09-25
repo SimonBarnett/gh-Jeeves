@@ -17,7 +17,12 @@ Execute and record the KEY success metric: GIT announce through to workers
 Agentic control is an overlay: running this skill helps operators; the gate
 itself is script-only and must never require an LLM.
 
-## TODO: seed FR #N
+## G1 surface (local, no live IRC)
 
-Populate pytest invocation and G2 checklist after the matching seed FR (headline
-#1) lands.
+```powershell
+cd <temp clone of gh-Jeeves>
+python -m pytest tests/test_announce_length_fr24.py -q
+```
+
+FR #24 (gate-blocking length-safe announce) is part of the #1 token-less gate
+path: every machine-read line must round-trip parse with vitals intact.
