@@ -21,11 +21,25 @@ class _FakeClient:
     def join(self, *chans: str) -> None:
         self.joined.extend(chans)
 
-    def privmsg(self, target: str, text: str) -> None:
+    def privmsg(self, target: str, text: str, *, pace: bool = True) -> None:
         self.msgs.append((target, text))
 
     def send_raw(self, line: str) -> None:  # pragma: no cover
         pass
+
+
+def _drain_flush(chair: JeevesChair, *, expect_min: int = 0, timeout: float = 2.0) -> None:
+    """FR #74: drain enqueues on OutboundFloodQueue — start and wait for sends."""
+    import time
+    chair._outbox.flood_s = 0.0
+    chair._outbox.start()
+    chair._drain_outbox()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if chair._outbox.pending() == 0 and (expect_min == 0 or chair._outbox.sent >= expect_min):
+            break
+        time.sleep(0.02)
+    time.sleep(0.05)
 
 
 def test_migrate_legacy_pos_file(tmp_path: Path):
@@ -102,7 +116,7 @@ def test_drain_migrates_legacy_and_does_not_flood(tmp_path: Path):
         auto_join=False,
         shops=["#flamingo"],
     )
-    chair._drain_outbox()
+    _drain_flush(chair, expect_min=1)
     texts = [t for _, t in client.msgs]
     assert texts == ["new-only"]
     assert (home / POS_NAME).is_file()
@@ -124,7 +138,7 @@ def test_drain_cutover_no_pos_no_replay(tmp_path: Path):
         auto_join=False,
     )
     assert int((home / POS_NAME).read_text(encoding="utf-8").strip()) == len(raw)
-    chair._drain_outbox()
+    _drain_flush(chair, expect_min=0)
     assert client.msgs == []
 
 
@@ -144,7 +158,7 @@ def test_drain_after_seed_sends_new_lines_only(tmp_path: Path):
     line = "PRIVMSG #bobiverse :GIT opened SimonBarnett/gh-Jeeves#1 x\n"
     with (home / "chair-outbox.txt").open("ab") as f:
         f.write(line.encode("utf-8"))
-    chair._drain_outbox()
+    _drain_flush(chair, expect_min=1)
     assert any("GIT opened" in t for _, t in client.msgs)
 
 
@@ -225,7 +239,7 @@ def test_mid_line_offset_drains_remainder_only(tmp_path: Path):
         client=client,
         auto_join=False,
     )
-    chair._drain_outbox()
+    _drain_flush(chair, expect_min=1)
     texts = [t for _, t in client.msgs]
     assert "sent-already" not in texts
     assert any("partial" in t or "tail" in t for t in texts)
