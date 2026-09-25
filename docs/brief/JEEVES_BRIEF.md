@@ -58,7 +58,7 @@ Evidence for each is in sections 4, 11, 12 and 18. Each FR needs a failing test 
 | K6 | **The `BobJeeves` service is Disabled** and Jeeves runs from the scheduled task `BobJeeves-chair` | section 4.3 | Jeeves as its own Windows service (agentic_build #330 / FR #7): `Install-BobJeeves.ps1 -Apply` sets **start= auto**, failure restart, and **Disable-ScheduledTask BobJeeves-chair**. |
 | K7 | **The `BobIrcd` service shows Stopped while ergo.exe runs** outside it | section 4.3 | **Report only.** gh-Jeeves must not touch Ergo/BobIrcd; raise it for Simon in agentic_build. Jeeves health should detect the IRC server being down. |
 | K8 | **The receiver launcher `BobReport-ionos` is ad hoc** (a script in the Administrator profile, not in any repo) | section 4.3, section 18 | gh-Jeeves (or agentic_build) owns the receiver service and installer. |
-| K9 | **`config/bobiverse.json` has duplicate `reportUrl` keys** (with and without :7700) | section 4.2 | A single key plus a config lint test. |
+| K9 | **`config/bobiverse.json` has duplicate `reportUrl` keys** (with and without :7700) | section 4.2 | A single key (`https://irc.ntsa.uk/bob/v1/report`) plus `jeeves.config_lint` / FR #10 tests. |
 | K10 | **Docs contradict the rules:** 3 agentic_build README diagrams and the `bob-token-efficient-handoff` skill say "Jeeves offers the job" | section 4.4 | Fix the docs and skills; gh-Jeeves README is the source of truth with small diagrams. |
 | K11 | **ASSIGN has no owner:** no code sends it, so it was hand/LLM-sent via bob-marchhare. Several ASSIGNs were fired while the worker was busy, and multi-line assignments split into separate wakes (blocks gate) | sections 11, 12, 18 | A deterministic single-line OFFER from the ear, one item per worker, gated on busy state. |
 | K12 | **Worker sessions look idle:** FROM payloads run as hidden `agent.exe -r <session> -p` processes, not in the visible seat | section 11 | Busy state on the webhook/TipForm from ACK/DONE; the worker pack echoes its task in the seat. |
@@ -184,7 +184,7 @@ Seed skills (each is a seed FR with a test or lint that checks the skill exists 
   - Copies the skills.
   - No Windows services.
 - TipForm consumes the digest (`Read-BobReportDigestHttp` → `Apply-BobIrcDigestCursorPools`). The tray's **Plan** menu launches Grok or Cursor in plan mode with only skills-visionary (`Install-VisionarySkills.ps1`).
-- `config/bobiverse.json` has `chairNick: Jeeves`, `chairHome: ionos`. **Note:** it contains **two `reportUrl` keys**, `https://irc.ntsa.uk:7700/bob/v1/report` and `https://irc.ntsa.uk/bob/v1/report`. The second wins in most JSON parsers; clean this up.
+- `config/bobiverse.json` has `chairNick: Jeeves`, `chairHome: ionos`. **Was:** two `reportUrl` keys (`:7700` and IIS HTTPS). **Now (FR #10 / K9):** single `reportUrl` `https://irc.ntsa.uk/bob/v1/report`; linted by `jeeves.config_lint`.
 - `tools/Close-BobSupersededGithub.ps1` and `Close-BobMrbPassedIssues.ps1` handle supersede on GitHub (closing PRs and issues). They do not manage the queue.
 - `tools/Bob-IrcTcpTestServer.ps1` is a minimal wire test server. gh-Jeeves needs a proper local test ircd (see #329).
 
