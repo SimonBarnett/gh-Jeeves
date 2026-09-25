@@ -46,7 +46,7 @@ LLM features, offering/assigning, Ergo/BobIrcd config, TipForm UI, worker implem
 
 ## Wire grammar (owned here)
 
-- Announce: `GIT <event> <owner/repo> …` (≤380 chars).
+- Announce (FR #24): `GIT <event> <FR|MRB|UAT> <owner/repo#n> <action> <url> [fixes:] [head:] <title>` — UTF-8 byte budget vs IRC 512; only title truncated; compact fallback; pre-send parse round-trip; queue from webhook not IRC text (`src/jeeves/announce.py`).
 - Idle: `!bored` (worker → own shop).
 - Offer (ear): `<nick>: OFFER <FR|MRB|UAT> <owner/repo>#<n> <url>` — one open offer per worker.
 - Accept: `ACK <TYPE> <owner/repo>#<n>`

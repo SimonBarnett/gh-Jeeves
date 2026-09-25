@@ -38,18 +38,29 @@ def test_supersede_fr_to_mrb(tmp_path: Path):
 
 
 def test_announce_line_bounded():
+    from jeeves.announce import wire_line_bytes, IRC_LINE_MAX_BYTES, parse_announce
+
     line = format_github_webhook_announce(
         "issues",
         {
             "action": "opened",
-            "issue": {"number": 1, "title": "t" * 500},
+            "issue": {
+                "number": 1,
+                "title": "t" * 500,
+                "html_url": "https://github.com/o/r/issues/1",
+            },
             "repository": {"full_name": "o/r"},
             "sender": {"login": "u"},
         },
     )
     assert line is not None
-    assert len(line) <= 380
+    assert wire_line_bytes(line) <= IRC_LINE_MAX_BYTES
     assert line.startswith("GIT issues")
+    parsed = parse_announce(line)
+    assert parsed is not None
+    assert parsed.task == "FR"
+    assert parsed.ref == "o/r#1"
+    assert parsed.action == "opened"
 
 
 def test_process_rejects_secret_field_only():

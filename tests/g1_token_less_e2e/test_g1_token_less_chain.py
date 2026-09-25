@@ -111,7 +111,14 @@ def test_g1_token_less_e2e_chain(g1_home: Path):
                 x.startswith("announce:GIT issues") for x in jeeves.handled
             ):
                 time.sleep(0.05)
-            assert any("GIT issues SimonBarnett/gh-Jeeves opened #1" in x for x in jeeves.handled)
+            # FR #24: vital-first form still carries event/repo/action/number
+            assert any(
+                "GIT issues" in x
+                and "SimonBarnett/gh-Jeeves" in x
+                and "opened" in x
+                and ("#1" in x or "gh-Jeeves#1" in x)
+                for x in jeeves.handled
+            )
 
             snap = _get_report(base)
             unacc = snap["queue"]["unaccepted"]
