@@ -37,6 +37,8 @@ flowchart LR
 
 ## CAST IRON rules
 
+**Channel join (FR #55):** on connect and reconnect Jeeves sends LIST and JOINs every channel returned (skips 0/+ local and config denylist). Periodic re-LIST (default 60s) joins newly created shops. KICK rejoins with backoff; ban/invite-only logs once and stops. Static shops is optional seed only.
+
 1. Announce only on `#bobiverse`; queue on digest webhook.  
 2. Silent in every `#{machine}`: ACK → accepted+busy; DONE → done+idle+supersede.  
 3. **Never** handle `!bored`; **never** offer or assign.  
