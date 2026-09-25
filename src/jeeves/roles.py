@@ -54,12 +54,14 @@ class JeevesChair:
         nick: str = "Jeeves",
         shops: list[str] | None = None,
         resync_scheduler=None,
+        client=None,
     ):
         self.home = Path(home)
         self.report_url = report_url.rstrip("/")
         self.nick = nick
         self.shops = shops or ["#flamingo"]
-        self.client = IrcClient(host, port, nick)
+        # FR #46: inject TlsIrcClient for Ergo; default plain G1 IrcClient
+        self.client = client if client is not None else IrcClient(host, port, nick)
         self.client.join("#bobiverse", *self.shops)
         self._stop = threading.Event()
         self._t = threading.Thread(target=self._run, name="jeeves-chair", daemon=True)
@@ -265,7 +267,18 @@ class JeevesChair:
                 self._drain_outbox()
             except Exception:
                 pass
-            msg = self.client.wait_privmsg(timeout=0.3)
+            try:
+                msg = self.client.wait_privmsg(timeout=0.3)
+            except OSError:
+                # FR #46: native TLS client reconnect-in-place (backoff on throttle)
+                recon = getattr(self.client, "reconnect", None)
+                if callable(recon):
+                    try:
+                        recon()
+                        self.client.join("#bobiverse", *self.shops)
+                    except Exception:
+                        time.sleep(1.0)
+                msg = None
             if msg:
                 src, target, text = msg
                 try:

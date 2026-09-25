@@ -31,6 +31,29 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--port", type=int, default=int(os.environ.get("AGENTIC_IRC_PORT") or "0"))
     p.add_argument("--tls", action="store_true", help="TLS to Ergo (production)")
     p.add_argument(
+        "--tls-insecure",
+        action="store_true",
+        help="TLS without cert verify (G1 local self-signed only)",
+    )
+    p.add_argument(
+        "--tls-cafile",
+        default=os.environ.get("JEEVES_TLS_CAFILE") or "",
+        help="Optional PEM CA bundle for Ergo",
+    )
+    p.add_argument(
+        "--tls-pin-sha256",
+        default=os.environ.get("JEEVES_TLS_PIN_SHA256") or "",
+        help="Optional SHA-256 pin of server DER cert (hex)",
+    )
+    p.add_argument(
+        "--sasl-user",
+        default=os.environ.get("AGENTIC_IRC_SASL_USER") or "",
+    )
+    p.add_argument(
+        "--sasl-password",
+        default=os.environ.get("AGENTIC_IRC_SASL_PASSWORD") or "",
+    )
+    p.add_argument(
         "--digest-home",
         default=os.environ.get("BOB_DIGEST_HOME") or "",
         help="Queue + chair-outbox home (must differ from --jeeves-home)",
@@ -247,13 +270,17 @@ def main(argv: list[str] | None = None) -> int:
                     ):
                         host = "irc.ntsa.uk"
                     client = TlsIrcClient(
-                        host,
-                        port,
-                        args.nick,
-                        tls=True,
-                        insecure=bool(getattr(args, "tls_insecure", False)),
-                        password=args.password or "",
-                    )
+                    host,
+                    port,
+                    args.nick,
+                    tls=True,
+                    insecure=bool(args.tls_insecure),
+                    cafile=args.tls_cafile or None,
+                    cert_pin_sha256=args.tls_pin_sha256 or None,
+                    password=args.password or "",
+                    sasl_user=args.sasl_user or "",
+                    sasl_password=args.sasl_password or "",
+                )
                     print(f"INFO native TLS IRC client host={host}:{port}", flush=True)
                 except ImportError:
                     print(

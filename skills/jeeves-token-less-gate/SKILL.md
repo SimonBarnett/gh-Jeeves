@@ -40,5 +40,13 @@ Pass criteria:
 
 ## G2 (manual after deploy)
 
-Follow `docs/migration-plan.md` section 16.3; record in release notes. Do not
-stamp UAT from this skill.
+Follow `docs/migration-plan.md` section 16.3 and `docs/g2-live-smoke-checklist.md`
+(including the **TLS IRC FR #46** line: native `python -m jeeves --tls`, not
+`agentic_irc` `irc_agent --chair`). Record in release notes. Do not stamp UAT
+from this skill.
+
+## G1 TLS path (FR #46)
+
+```text
+pytest -q tests/g1_token_less_e2e/test_g1_tls_path.py
+```
