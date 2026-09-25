@@ -69,12 +69,13 @@ the release / FR #39 comment thread.
 
 After deploy, confirm with `WHOIS Jeeves` that every live `#{machine}` shop plus `#bobiverse` appear. New shops appear within one re-LIST interval (default 60s). Denylist is config-only; never edit Ergo `ircd.yaml` for joins.
 
-See `docs/g2-live-smoke-checklist.md` (FR #55 section) and `jeeves.channel_join.AutoJoinController`.
-
+Code: `jeeves.channel_join.AutoJoinController` (LIST + periodic re-LIST). CAST IRON: never touch Ergo/BobIrcd (`README` rule 9; BRIEF §3 / §9).
 
 ## Operator note (FR #52, merged PR #62)
 
-Jeeves grants `+h` to authenticated `bob-*` and `+o` to authenticated `simon` (fleet host) via services account (SASL / account-notify / extended-join). Workers get no modes. `!sweep [#chan]` is simon-only and posts no channel text.
+Matches README CAST IRON Modes (FR #52): authenticated `bob-*` get `+h` (`+o` in own `#{machine}` shop); authenticated `simon` from a fleet host gets `+o`. Trust is services account (SASL / account-notify / extended-join), never nick alone. Workers get no modes. No channel text. `!sweep [#chan]` is simon-only (account `simon`).
 
-G2: check `NAMES` on `#bobiverse` and a shop (e.g. `#flamingo`) after bob/simon join. Do not edit Ergo `ircd.yaml` for modes (ChanServ AMODE / registration remains operator-owned).
+G2: check `NAMES` on `#bobiverse` and a shop (e.g. `#flamingo`) after bob/simon join — expect half-op / op prefixes. Do not edit Ergo `ircd.yaml` for modes (ChanServ AMODE / registration remains operator-owned; BRIEF: "gh-Jeeves never edits Ergo or BobIrcd config").
+
+Code: `jeeves.mode_grants.ModeGrantController`.
 
