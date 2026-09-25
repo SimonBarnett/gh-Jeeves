@@ -26,7 +26,7 @@ from .cast_iron import (
     shop_egress_allowed_for_chair,
 )
 from .helpcmd import HelpRateLimit, build_help, parse_help
-from .listfmt import format_unaccepted_list, list_rate_notice, list_rate_ok
+from .listfmt import FLOOD_S, format_unaccepted_list, list_rate_notice, list_rate_ok
 from .wire import (
     is_bored,
     is_help,
@@ -153,7 +153,7 @@ class JeevesChair:
         pos_path.write_text(str(len(data)), encoding="utf-8")
 
     def _handle_list(self, src: str, text: str) -> None:
-        """FR #39 / #208: !list by PM only (channel or PM)."""
+        """FR #50 / #208: !list from channel or PM → PM only; never channel flood."""
         if not list_rate_ok(src):
             self._pm(src, list_rate_notice(src))
             self.handled.append(f"list_rate:{src}")
@@ -162,8 +162,11 @@ class JeevesChair:
         lines = format_unaccepted_list(
             self.home, task_filter=task_f, repo_filter=repo_f, list_all=list_all
         )
-        for line in lines:
+        # Pace under Ergo flood (one PM per FLOOD_S)
+        for i, line in enumerate(lines):
             self._pm(src, line)
+            if i + 1 < len(lines) and FLOOD_S > 0:
+                time.sleep(FLOOD_S)
         self.handled.append(f"list_pm:{src}:{len(lines)}")
 
     def _handle_help(self, src: str, text: str) -> None:
