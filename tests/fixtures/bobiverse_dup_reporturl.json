@@ -1,0 +1,10 @@
+{
+  "channel": "#bobiverse",
+  "host": "irc.ntsa.uk",
+  "port": 6697,
+  "reportUrl": "https://irc.ntsa.uk:7700/bob/v1/report",
+  "reportPort": 7700,
+  "chairNick": "Jeeves",
+  "chairHome": "ionos",
+  "reportUrl": "https://irc.ntsa.uk/bob/v1/report"
+}
