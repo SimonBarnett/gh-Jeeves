@@ -103,6 +103,9 @@ class TlsIrcClient:
         self.insecure = insecure
         self.cafile = cafile
         self.cert_pin_sha256 = cert_pin_sha256
+        from .env_secrets import hydrate_secrets_from_files
+
+        hydrate_secrets_from_files()
         self.password = password or os.environ.get("AGENTIC_IRC_PASSWORD") or ""
         self.sasl_user = sasl_user or os.environ.get("AGENTIC_IRC_SASL_USER") or ""
         self.sasl_password = sasl_password or os.environ.get("AGENTIC_IRC_SASL_PASSWORD") or ""

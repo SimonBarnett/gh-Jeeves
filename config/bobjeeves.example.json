@@ -1,0 +1,21 @@
+{
+  "topology": "combined",
+  "comment": "FR #48: one service runs chair+receiver (python -m jeeves all). No BobIrcd dependency.",
+  "nick": "Jeeves",
+  "irc_host": "irc.ntsa.uk",
+  "irc_port": 6697,
+  "tls": true,
+  "tls_insecure": false,
+  "tls_cafile": "",
+  "tls_pin_sha256": "",
+  "sasl_user": "",
+  "sasl_password_file": "%USERPROFILE%\\.grok\\ergo\\connect.password",
+  "password_file": "",
+  "receiver_bind": "127.0.0.1",
+  "receiver_port": 19781,
+  "jeeves_home": "%USERPROFILE%\\.agentic-irc-jeeves",
+  "digest_home": "%USERPROFILE%\\.agentic-irc-bobiverse",
+  "shops_seed": "#bobiverse,#flamingo,#ionos,#marchhare,#ce-priority-dev1",
+  "resync_interval_s": 900,
+  "never_depend_on": ["BobIrcd"]
+}
