@@ -439,3 +439,62 @@ def test_worker_denied_unignore_on_chair(tmp_path: Path):
         chair.stop()
         ircd.stop()
 
+def test_ignore_github_url_normalizes(tmp_path: Path):
+    home = tmp_path / "d"
+    st, canon = add_ignore(home, "https://github.com/SimonBarnett/Sandbox")
+    assert st == "added"
+    assert canon == "SimonBarnett/Sandbox"
+    assert is_ignored(home, "simonbarnett/sandbox")
+
+
+def test_close_and_uat_claims_ignored(tmp_path: Path):
+    home = tmp_path / "d"
+    add_ignore(home, "o/x")
+    assert apply_queue_event(home, Claim(repo="o/x", task="CLOSE", id="#1")) == "ignored"
+    assert apply_queue_event(
+        home, Claim(repo="o/x", task="UAT", id="#1", pr_id="#2", merged=True)
+    ) == "ignored"
+
+
+def test_reconcile_strips_ignored_from_live_queue(tmp_path: Path):
+    """resync reconcile drops ignored repos already sitting in queue.json."""
+    from jeeves.resync import DiffStats, reconcile_queue
+
+    home = tmp_path / "d"
+    save_queue(
+        home,
+        {
+            "v": 1,
+            "unaccepted": [
+                {"repo": "a/gone", "task": "FR", "id": "#1", "seq": 1, "line": "x"},
+                {"repo": "a/stay", "task": "FR", "id": "#2", "seq": 2, "line": "y"},
+            ],
+            "accepted": [
+                {"repo": "a/gone", "task": "MRB", "id": "#3", "seq": 3, "line": "z", "nick": "w"}
+            ],
+            "done": [],
+            "workers": {},
+        },
+    )
+    add_ignore(home, "gone")
+    desired = [
+        {"repo": "a/stay", "task": "FR", "id": "#2", "seq": 2, "line": "y"},
+        {"repo": "a/gone", "task": "FR", "id": "#9", "seq": 9, "line": "should-skip"},
+    ]
+    stats = reconcile_queue(home, desired, connected_nicks=set())
+    q = load_queue(home)
+    repos_u = {r.get("repo") for r in q["unaccepted"]}
+    repos_a = {r.get("repo") for r in q["accepted"]}
+    assert "a/gone" not in repos_u
+    assert "a/gone" not in repos_a
+    assert "a/stay" in repos_u
+    assert stats.removed >= 1
+
+
+def test_duplicate_ignore_case_insensitive(tmp_path: Path):
+    home = tmp_path / "d"
+    assert add_ignore(home, "Owner/Repo")[0] == "added"
+    assert add_ignore(home, "owner/repo")[0] == "exists"
+    doc = load_ignored(home)
+    assert len(doc["repos"]) == 1
+

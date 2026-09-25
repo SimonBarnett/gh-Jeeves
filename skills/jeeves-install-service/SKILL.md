@@ -55,7 +55,7 @@ Exit codes: `0` ok, `2` validation errors.
 3. `Get-Service BobJeeves` — starting it must **not** start BobIrcd.
 4. Disable task `BobJeeves-chair` after healthy.
 5. IIS proxies `https://irc.ntsa.uk/bob/v1/*` → `127.0.0.1:19781`.
-6. **Outbox pos (FR #71 / cutover):** digest home may still have agentic_irc `chair-outbox.txt.pos`. gh-Jeeves writes `chair-outbox.pos`. First start **migrates** the legacy file; if neither exists and the outbox is non-empty, start is **EOF** (no replay flood to `#bobiverse`). Do not pass `--replay-outbox` on production cutover unless operators intentionally want a full re-announce. See `docs/receiver-bobcallback-cutover.md`.
+6. **Outbox pos (FR #71 / cutover):** digest home may still have agentic_irc `chair-outbox.txt.pos`. gh-Jeeves writes `chair-outbox.pos`. First start **migrates** the legacy file; if neither exists and the outbox is non-empty, start is **EOF** (no replay flood to `#bobiverse`). Empty / whitespace / garbage / negative pos files are treated as missing (EOF park) — never as `0`. Do not pass `--replay-outbox` on production cutover unless operators intentionally want a full re-announce. See `docs/receiver-bobcallback-cutover.md`.
 
 ## Forbidden
 
