@@ -98,7 +98,8 @@ def test_k11_one_offer_per_worker_and_busy_gate(tmp_path: Path):
     assert db.line and "NAK busy" in db.line
 
 
-def test_k11_ear_live_single_offer_no_stack(tmp_path: Path):
+def test_k11_ear_bored_path_retired_fr106(tmp_path: Path):
+    """FR #106: ear no longer OFFERs on !bored — Jeeves assigns instead."""
     home = tmp_path / "digest"
     home.mkdir()
     save_queue(
@@ -117,6 +118,7 @@ def test_k11_ear_live_single_offer_no_stack(tmp_path: Path):
     rport = rx.start()
     base = f"http://127.0.0.1:{rport}"
     jeeves = JeevesChair("127.0.0.1", port, home, base, shops=["#flamingo"])
+    jeeves.live_seats_override = {"flamingo-12"}
     ear = BobEar("127.0.0.1", port, home, machine="flamingo")
     worker = IrcClient("127.0.0.1", port, "flamingo-12")
     worker.join("#flamingo")
@@ -125,31 +127,18 @@ def test_k11_ear_live_single_offer_no_stack(tmp_path: Path):
     time.sleep(0.15)
     try:
         worker.privmsg("#flamingo", "!bored")
-        o1 = worker.wait_privmsg(
-            predicate=lambda m: m[0].startswith("bob-") and "OFFER" in m[2],
+        assign = worker.wait_privmsg(
+            predicate=lambda m: m[0].lower() == "jeeves"
+            and m[2].startswith("flamingo-12:")
+            and "OFFER" not in m[2],
             timeout=5.0,
         )
-        assert o1 is not None
-        assert is_single_line(o1[2])
-        assert not contains_assign(o1[2])
-        assert o1[2].count("OFFER") == 1
-
-        # second !bored must not stack another OFFER
-        worker.privmsg("#flamingo", "!bored")
-        time.sleep(0.5)
-        offers = [x for x in ear.offers if x.startswith("flamingo-12: OFFER")]
-        assert len(offers) == 1
-        assert any(x.startswith("skip:one_open:") for x in ear.offers)
-
-        # busy gate
-        set_worker_state(home, "flamingo-12", "busy")
-        ear.offer_state.clear("flamingo-12")
-        worker.privmsg("#flamingo", "!bored")
-        nak = worker.wait_privmsg(
-            predicate=lambda m: m[0].startswith("bob-") and "NAK busy" in m[2],
-            timeout=5.0,
-        )
-        assert nak is not None
+        assert assign is not None
+        assert is_single_line(assign[2])
+        assert not contains_assign(assign[2])
+        assert "OFFER" not in assign[2]
+        assert any(str(x).startswith("retired_bored:") for x in ear.offers)
+        assert not any("OFFER" in str(x) for x in ear.offers)
     finally:
         jeeves.stop()
         ear.stop()
@@ -158,11 +147,10 @@ def test_k11_ear_live_single_offer_no_stack(tmp_path: Path):
         ircd.stop()
 
 
-def test_k11_chair_does_not_emit_assign():
+def test_k11_chair_does_not_use_legacy_offer_formatter():
     import inspect
     from jeeves.roles import JeevesChair
 
     src = inspect.getsource(JeevesChair)
-    assert "ASSIGN" not in src or "ASSIGN" in src  # may appear in comments only
-    # must not call format_offer
     assert "format_offer(" not in src
+    assert "format_single_line_offer" not in src

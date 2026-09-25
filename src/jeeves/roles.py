@@ -14,6 +14,11 @@ from .flood_queue import OutboundFloodQueue
 from .local_ircd import IrcClient
 from .mode_grants import ModeGrantController
 from .nicks import bored_gate, canonical_worker_nick, worker_shop_channel
+from .assign import (
+    ChairAssignState,
+    live_seats_from_modes,
+    trust_bored,
+)
 from .offer import EarOfferState, contains_assign, is_single_line
 from .queue import (
     accept_job,
@@ -115,8 +120,8 @@ def _log_announce_line(text: str) -> None:
 
 class JeevesChair:
     """
-    Drains chair-outbox to #bobiverse; silent ACK/DONE listener in shops.
-    Never handles !bored / never offers (K1 CAST IRON).
+    Drains chair-outbox to #bobiverse; ACK/DONE listener in shops.
+    FR #106 CAST IRON: assigns next job on worker !bored in #{machine}.
     Optional FR #25 resync scheduler (GitHub rebuild) injected by caller.
     """
 
@@ -216,10 +221,14 @@ class JeevesChair:
             # auto_join disabled but client can send_raw — still static join
             if not auto_join:
                 self.client.join("#bobiverse", *self.shops)
-        # Policy pins — tests assert these stay false.
-        assert chair_handles_bored() is False
-        assert chair_may_offer() is False
+        # Policy pins — FR #106: chair owns !bored → assign.
+        assert chair_handles_bored() is True
+        assert chair_may_offer() is True
         self._last_stale_sweep = 0.0
+        self.assign_state = ChairAssignState()
+        self.assign_state.bind(self.home)
+        # Optional inject for tests: set of live worker nicks
+        self.live_seats_override: set[str] | None = None
 
     def _pm(self, nick: str, text: str) -> None:
         """Private message only (help/list). Never channel flood. Non-blocking (#74)."""
@@ -227,12 +236,20 @@ class JeevesChair:
         self._outbox.put(nick, text)
 
     def _shop_privmsg(self, channel: str, text: str) -> None:
-        """Chair must remain silent in shops (K1). Block claim/offer egress."""
+        """FR #106: assign / nothing-queued lines only; block legacy OFFER/claim."""
         if not shop_egress_allowed_for_chair(text) or is_forbidden_shop_egress(text):
             self.handled.append(f"blocked_shop_egress:{channel}:{text[:80]}")
             return
         self.shop_egress.append((channel, text))
         self._outbox.put(channel, text)
+
+    def _live_seats(self, shop: str) -> set[str]:
+        if self.live_seats_override is not None:
+            return set(self.live_seats_override)
+        modes = None
+        if self.mode_grants is not None:
+            modes = self.mode_grants.state.modes
+        return live_seats_from_modes(modes, shop=shop)
 
     def start(self) -> None:
         self._outbox.start()
@@ -589,10 +606,9 @@ class JeevesChair:
             elif self._handle_ignore_cmds(src, text):
                 return
             return
-        # silent shop: ACK / DONE only — never !bored, never OFFER/claim (K1)
+        # FR #106: !bored → assign; ACK/DONE still recorded here.
         if is_bored(text):
-            # K1: ear owns idle pings; chair never claims or replies in shop.
-            self.handled.append("ignored_bored")
+            self._handle_bored_assign(src, target)
             return
         ack = parse_ack(text)
         if ack:
@@ -639,6 +655,7 @@ class JeevesChair:
             except Exception as e:
                 self.handled.append(f"ack_report_err:{src}")
                 log.warning("cmd=ack nick=%s report_err=%s", src, type(e).__name__)
+            self.assign_state.on_ack(canonical_worker_nick(src) or src)
             if st == "accepted":
                 self.handled.append(f"ack:{src}:{ack.repo}#{ack.number}")
                 log.info(
@@ -704,6 +721,7 @@ class JeevesChair:
                 }
             )
             self._post_report({"op": "worker_state", "nick": src, "state": "idle"})
+            self.assign_state.on_done(canonical_worker_nick(src) or src)
             self.handled.append(f"done:{src}:{done.repo}#{done.number}:{st}")
             log.info(
                 "event=done nick=%s job=%s#%s mode=%s",
@@ -714,6 +732,46 @@ class JeevesChair:
             )
             log.info("cmd=done nick=%s repo=%s#%s", src, done.repo, done.number)
             return
+
+    def _handle_bored_assign(self, src: str, target: str) -> None:
+        """FR #106: trusted !bored in own shop → one assign line (or nothing queued)."""
+        reason = trust_bored(src, target, is_pm=not str(target or "").startswith("#"))
+        if reason != "ok":
+            log.info("event=bored_ignore nick=%s target=%s reason=%s", src, target, reason)
+            self.handled.append(f"bored_ignore:{src}:{reason}")
+            return
+        # No idle wait — !bored is join/DONE signal, not 120s idle.
+        if bored_gate(self.home, src, target, skip_idle_check=True) != "ok":
+            log.info("event=bored_ignore nick=%s target=%s reason=gate", src, target)
+            self.handled.append(f"bored_ignore:{src}:gate")
+            return
+        shop = worker_shop_channel(src) or target
+        live = self._live_seats(shop)
+        live.add(canonical_worker_nick(src) or src)
+        decision = self.assign_state.decide(
+            self.home,
+            src,
+            target,
+            live_nicks=live,
+            chair_nick=self.nick,
+        )
+        if decision.action == "assign" and decision.line:
+            self._shop_privmsg(target, decision.line)
+            self.handled.append(f"assign:{src}:{decision.line}")
+            log.info("event=assign nick=%s line=%s", src, decision.line[:120])
+            return
+        if decision.action == "nothing" and decision.line:
+            self._shop_privmsg(target, decision.line)
+            self.handled.append(f"assign_empty:{src}")
+            log.info("event=assign_empty nick=%s reason=%s", src, decision.reason)
+            return
+        self.handled.append(f"bored_skip:{src}:{decision.action}:{decision.reason}")
+        log.info(
+            "event=bored_skip nick=%s action=%s reason=%s",
+            src,
+            decision.action,
+            decision.reason,
+        )
 
     def _handle_quit_raw(self, line: str) -> None:
         """FR #102: on QUIT, release that nick's accepted jobs + workers entry."""
@@ -747,11 +805,16 @@ class JeevesChair:
             log.warning("quit_release_report_err nick=%s err=%s", nick, type(e).__name__)
 
     def _sweep_stale_workers(self) -> None:
-        """Periodic FR #102 stale sweep (default 30m idle)."""
+        """Periodic FR #102 stale sweep + FR #106 offer timeout."""
         now = time.time()
         if now - float(getattr(self, "_last_stale_sweep", 0.0) or 0.0) < 60.0:
             return
         self._last_stale_sweep = now
+        try:
+            for nick in self.assign_state.expire_timed_out(now=now):
+                self.handled.append(f"offer_timeout:{nick}")
+        except Exception as e:
+            log.warning("offer_expire_err=%s", type(e).__name__)
         expired = expire_stale_workers(self.home)
         for nick in expired:
             self.handled.append(f"stale_release:{nick}")
@@ -865,26 +928,6 @@ class BobEar:
                 continue
             if not is_bored(text):
                 continue
-            # K2: accept {machine}-{pid} (and legacy w-*); reject bob-/Jeeves
-            gate = bored_gate(self.home, src, target, skip_idle_check=True)
-            if gate != "ok":
-                continue
-            canon = canonical_worker_nick(src)
-            if not canon:
-                continue
-            shop = worker_shop_channel(src)
-            if shop != self.shop:
-                continue
-            # K11: one single-line OFFER per worker, busy-gated; ear owns offer (not ASSIGN)
-            decision = self.offer_state.decide(self.home, src, machine=self.machine)
-            if decision.action == "offer" and decision.line:
-                self._emit_offer_line(decision.line)
-            elif decision.action == "nak_busy" and decision.line:
-                self._emit_offer_line(decision.line)
-            elif decision.action == "no_jobs" and decision.line:
-                self._emit_offer_line(decision.line)
-            elif decision.action == "nak_open":
-                # silent: already have one open offer — do not stack multi-line wakes
-                self.offers.append(f"skip:one_open:{src}")
-            else:
-                self.offers.append(f"skip:{decision.action}:{src}")
+            # FR #106: ear !bored OFFER path retired — Jeeves assigns.
+            self.offers.append(f"retired_bored:{src}")
+            log.info("event=ear_bored_retired nick=%s shop=%s", src, self.shop)

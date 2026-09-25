@@ -10,11 +10,11 @@ With every LLM/token pool disabled, this chain must complete with **scripts only
 
 1. GitHub event → Bob GIT webhook  
 2. Jeeves announces `GIT …` on `#bobiverse` and updates the queue (supersede rules)  
-3. Idle worker `!bored` in its own `#{machine}`  
-4. **bob-{machine} ear** offers the top unaccepted job  
+3. Worker `!bored` in its own `#{machine}` (on join and after DONE)  
+4. **Jeeves assigns** the next job (`<nick>: <TYPE> <repo>#<n> <url>`, `!focus` order)  
 5. Worker `ACK` → Jeeves marks accepted + busy  
 6. Worker does the task (only step where AI is allowed)  
-7. Worker `DONE` → Jeeves marks done + idle + supersede  
+7. Worker `DONE` → Jeeves marks done + idle + supersede; worker `!bored` again  
 
 **Resync:** on service start (FR #49) loads \queue.json\ then GitHub resync so \!list\ is full; every 15m thereafter. Token from env/file, never logged.
 
@@ -26,14 +26,15 @@ With every LLM/token pool disabled, this chain must complete with **scripts only
 flowchart LR
   E[GitHub event] --> J[Jeeves announce + queue]
   J --> B["worker !bored in #machine"]
-  B --> O[bob-machine ear offer]
+  B --> O[Jeeves assign line]
   O --> A[worker ACK]
   A --> W[Jeeves: accepted + busy]
   W --> D[worker DONE]
   D --> S[Jeeves: done + idle + supersede]
+  S --> B
 ```
 
-*Caption: the token-less chain that the acceptance gate proves. Every box is a script except the worker's own work between ACK and DONE.*
+*Caption: the token-less chain that the acceptance gate proves (FR #106). Every box is a script except the worker's own work between ACK and DONE.*
 
 ## CAST IRON rules
 
@@ -44,17 +45,17 @@ flowchart LR
 **Channel join (FR #55):** on connect and reconnect Jeeves sends LIST and JOINs every channel returned (skips 0/+ local and config denylist). Periodic re-LIST (default 60s) joins newly created shops. KICK rejoins with backoff; ban/invite-only logs once and stops. Static shops is optional seed only.
 
 1. Announce only on `#bobiverse`; queue on digest webhook.  
-2. Silent in every `#{machine}`: ACK → accepted+busy; DONE → done+idle+supersede.  
-3. **Never** handle `!bored`; **never** offer or assign.  
-4. Workers stay in their own shop; ear owns offers.  
-5. Deterministic scripts-only path (works during token outage).  
+2. In every `#{machine}`: `!bored` → assign; ACK → accepted+busy; DONE → done+idle+supersede (FR #106).  
+3. **Jeeves owns `!bored` → assign** (ear OFFER path retired). One line: `<nick>: <TYPE> <repo>#<n> <url>`.  
+4. Workers stay in their own shop; only `{machine}-<pid>` `!bored` is trusted.  
+5. Deterministic scripts-only path (works during token outage / Sand empty).  
 6. Supersede: FR↔MRB↔UAT per GitHub events (see diagrams).  
-7. MRB PASS closes FR; FAIL one fix PR, FR stays open; only Bob stamps UAT.  
+7. MRB PASS closes FR; FAIL one fix PR, FR stays open; only Bob stamps UAT. Self-MRB only when one live seat.  
 8. `!list` in channel or PM → queue by PM only (`all`/`repo` filters; no silent cap).  
 9. Own Windows service; never touch Ergo/BobIrcd.  
 10. Busy/idle from ACK/DONE, not from TUI appearance.  
-11. `!ignore` / `!unignore` / `!ignored` (FR #75): suppress a repo from the whole Jeeves process (no announce, queue, `!list`, or ear offers). List persists in `ignored.json` beside `queue.json`. Simon (account) or `bob-*` ops mutate; `!ignored` is open.  
-12. `!focus` / `!unfocus` (FR #68): simon (services account) sets repo priority for `!list` and ear `!bored` (same sort). `high`/`medium`/`low` = 1/5/9; bare `!focus {repo}` = high. Persists `focus.json`; digest exposes `focus` additively.
+11. `!ignore` / `!unignore` / `!ignored` (FR #75): suppress a repo from the whole Jeeves process (no announce, queue, `!list`, or assign). List persists in `ignored.json` beside `queue.json`. Simon (account) or `bob-*` ops mutate; `!ignored` is open.  
+12. `!focus` / `!unfocus` (FR #68): simon (services account) sets repo priority for `!list` and Jeeves assign-on-`!bored` (same sort). `high`/`medium`/`low` = 1/5/9; bare `!focus {repo}` = high. Persists `focus.json`; digest exposes `focus` additively.
 
 Details: `docs/functional-spec.md`, `docs/vision.md`.
 
@@ -62,7 +63,7 @@ Details: `docs/functional-spec.md`, `docs/vision.md`.
 
 **Owns:** announce chair, queue+supersede, shop ACK/DONE listener, `!list`, webhook writer, GIT receiver, `BobJeeves` installer, G1 tests, docs, `skills/` overlay.
 
-**Does not own:** LLM features, offering/assigning, Ergo config, TipForm UI, worker packs (agentic_irc / agentic_build / AgentMonitor).
+**Does not own:** LLM features, Ergo config, TipForm UI, worker packs (agentic_irc / agentic_build / AgentMonitor). Assign-on-`!bored` is owned here (FR #106).
 
 Migration: `docs/migration-plan.md`. Vision input: `docs/brief/JEEVES_BRIEF.md`.
 

@@ -25,8 +25,9 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 
 | Shop line (own `#{machine}`) | Queue | Worker | Activity |
 |------|-------|--------|----------|
+| `!bored` | Jeeves assigns next (`!focus` order) or `<nick>: nothing queued` | unchanged until ACK | — |
 | `ACK <TYPE> <repo>#<n>` | unaccepted → accepted | busy | `<MODE> <repo>#<n> <title>` (TipForm START tile) |
-| `DONE <TYPE> <repo>#<n> …` | accepted → done + supersede | idle | cleared |
+| `DONE <TYPE> <repo>#<n> …` | accepted → done + supersede | idle | cleared; worker `!bored` again |
 | QUIT / DONE timeout / GIVEUP / NACK | accepted → unaccepted | idle | cleared |
 
 ```mermaid
@@ -48,7 +49,8 @@ flowchart LR
 - A bob-* ear being present is never a coding job; never publish a bare
   `repo: irc` job.
 - Each job carries **agent** and **model** when the worker reports them.
-- The ear must not offer to a worker that is busy on the webhook.
+- Jeeves must not assign to a worker that is busy / already accepted (FR #106).
+- Self-MRB assign only when no other live seat exists.
 
 ## Diagnose
 

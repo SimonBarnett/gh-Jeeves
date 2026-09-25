@@ -125,6 +125,7 @@ def test_k2_ear_offers_to_live_seat_nick(tmp_path: Path):
     seat = "flamingo-34992"
 
     jeeves = JeevesChair("127.0.0.1", port, home, base, shops=["#flamingo"])
+    jeeves.live_seats_override = {seat}
     ear = BobEar("127.0.0.1", port, home, machine="flamingo")
     worker = IrcClient("127.0.0.1", port, seat)
     worker.join("#flamingo")
@@ -133,13 +134,15 @@ def test_k2_ear_offers_to_live_seat_nick(tmp_path: Path):
     time.sleep(0.15)
     try:
         worker.privmsg("#flamingo", "!bored")
-        offer = worker.wait_privmsg(
-            predicate=lambda m: m[0].startswith("bob-") and "OFFER" in m[2],
+        # FR #106: Jeeves assigns (ear OFFER retired)
+        assign = worker.wait_privmsg(
+            predicate=lambda m: m[0].lower() == "jeeves"
+            and m[2].startswith(f"{seat}:")
+            and "OFFER" not in m[2],
             timeout=5.0,
         )
-        assert offer is not None, f"ear skips: {ear.offers}"
-        assert offer[2].startswith(f"{seat}:")
-        assert "OFFER FR SimonBarnett/gh-Jeeves#3" in offer[2]
+        assert assign is not None, f"jeeves={jeeves.handled} ear={ear.offers}"
+        assert "FR SimonBarnett/gh-Jeeves#3" in assign[2]
 
         worker.privmsg("#flamingo", "ACK FR SimonBarnett/gh-Jeeves#3")
         deadline = time.time() + 5

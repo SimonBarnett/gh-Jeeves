@@ -1,4 +1,4 @@
-"""Parse shop ACK/DONE/NACK/GIVEUP and !bored (ear only)."""
+"""Parse shop ACK/DONE/NACK/GIVEUP and !bored (Jeeves assign path, FR #106)."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ _NACK = re.compile(
 # Prefix that looks like an ACK but failed the full parse (for reject hint).
 _ACK_PREFIX = re.compile(r"^ACK\b", re.I)
 _ACK_HINT = "format: ACK FR|MRB|UAT owner/repo#N"
-# !bored / !BORED / optional trailing junk stripped — ear owns this command.
+# !bored / !BORED — Jeeves assigns (FR #106); ear OFFER path retired.
 _BORED = re.compile(r"^!+\s*bored\b", re.I)
 # !list with zero or more args (all, repo, fr, …) — FR #50
 _LIST = re.compile(r"^!+\s*list(?:\s+.*)?\s*$", re.I)
