@@ -101,6 +101,15 @@ class JeevesChair:
             # legacy static join only
             self.client.join("#bobiverse", *self.shops)
 
+        # FR #71: seed pos once at start — migrate legacy or park at EOF so history
+        # is not replayed; lines appended after this are drained normally.
+        try:
+            ob = outbox_path(self.home)
+            size = ob.stat().st_size if ob.is_file() else 0
+            resolve_outbox_start(self.home, outbox_size=size, replay=self.replay_outbox)
+        except OSError:
+            pass
+
         # Wire raw JOIN/ACCOUNT/MODE/LIST/KICK into FR52 + FR55 controllers
         if self.mode_grants is not None or self.auto_join_ctrl is not None:
             prev = getattr(self.client, "on_raw", None)

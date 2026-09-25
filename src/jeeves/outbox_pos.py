@@ -77,12 +77,14 @@ def resolve_outbox_start(
             pos = legacy_val
             write_pos(home, pos)
         elif size > 0 and not replay:
+            # Cutover: existing outbox, no pos → park at EOF (no #bobiverse flood)
             pos = size
             write_pos(home, pos)
         else:
+            # Empty outbox, or explicit replay: start at 0 and persist so later
+            # appends are drained (not treated as another cutover).
             pos = 0
-            if size > 0 and replay:
-                write_pos(home, 0)
+            write_pos(home, 0)
 
     if pos < 0:
         pos = 0

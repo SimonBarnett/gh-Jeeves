@@ -114,6 +114,7 @@ def test_drain_cutover_no_pos_no_replay(tmp_path: Path):
     raw = b"PRIVMSG #bobiverse :would-flood\n" * 20
     (home / "chair-outbox.txt").write_bytes(raw)
     client = _FakeClient()
+    # construct seeds pos at EOF (cutover)
     chair = JeevesChair(
         "127.0.0.1",
         1,
@@ -122,9 +123,29 @@ def test_drain_cutover_no_pos_no_replay(tmp_path: Path):
         client=client,
         auto_join=False,
     )
+    assert int((home / POS_NAME).read_text(encoding="utf-8").strip()) == len(raw)
     chair._drain_outbox()
     assert client.msgs == []
-    assert int((home / POS_NAME).read_text(encoding="utf-8").strip()) == len(raw)
+
+
+def test_drain_after_seed_sends_new_lines_only(tmp_path: Path):
+    """Fresh chair: seed at empty/EOF, then receiver append is announced."""
+    home = tmp_path
+    client = _FakeClient()
+    chair = JeevesChair(
+        "127.0.0.1",
+        1,
+        home,
+        "http://127.0.0.1:9",
+        client=client,
+        auto_join=False,
+    )
+    # historic pre-seed content would already be parked; append after construct
+    line = "PRIVMSG #bobiverse :GIT opened SimonBarnett/gh-Jeeves#1 x\n"
+    with (home / "chair-outbox.txt").open("ab") as f:
+        f.write(line.encode("utf-8"))
+    chair._drain_outbox()
+    assert any("GIT opened" in t for _, t in client.msgs)
 
 
 def test_cli_has_replay_outbox_flag():
