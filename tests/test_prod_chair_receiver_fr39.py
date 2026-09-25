@@ -172,7 +172,15 @@ def test_install_ps1_dry_run_json():
     data = json.loads(proc.stdout)
     assert data["never_touch_ircd"] is True
     assert data["service_name"] == "BobJeeves"
-    assert data.get("python_module") == "jeeves" or "jeeves" in str(data.get("chair_entry") or "")
+    # FR #48 / #72 / #96: DryRun uses service_cmdline + python_args (not python_module/chair_entry)
+    assert data.get("topology") == "combined"
+    assert data.get("no_bobircd_dependency") is True
+    assert int(data.get("receiver_port") or 0) == 19781
+    cmdline = str(data.get("service_cmdline") or "")
+    assert "-m jeeves" in cmdline
+    args = list(data.get("python_args") or [])
+    assert "-m" in args and "jeeves" in args and "all" in args
+    assert "--tls" in args
 
 
 def test_g2_checklist_exists():

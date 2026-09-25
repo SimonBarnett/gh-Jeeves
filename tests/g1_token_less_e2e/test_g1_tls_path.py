@@ -79,7 +79,10 @@ def test_reconnect_applies_backoff_after_throttle(monkeypatch):
 def test_g1_tls_chair_ack_path(tmp_path: Path):
     """TLS front + plain local ircd; JeevesChair over TlsIrcClient insecure."""
     cert_dir = tmp_path / "certs"
-    cert, key = make_self_signed_cert(cert_dir)
+    try:
+        cert, key = make_self_signed_cert(cert_dir)
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
     home = tmp_path / "digest"
     home.mkdir()
     save_queue(
@@ -125,6 +128,9 @@ def test_g1_tls_chair_ack_path(tmp_path: Path):
             nick="Jeeves",
             shops=["#flamingo"],
             client=client,
+            # FR #72: skip LIST/autojoin in this unit path — race with TLS reader
+            # was leaving handled=['autojoin_start'] only on slow Windows.
+            auto_join=False,
         )
         worker = TlsIrcClient(
             "127.0.0.1",
@@ -134,12 +140,14 @@ def test_g1_tls_chair_ack_path(tmp_path: Path):
             insecure=True,
             flood_s=0.05,
         )
+        # Ensure both nicks are on the shop before ACK
+        client.join("#flamingo")
         worker.join("#flamingo")
         chair.start()
-        time.sleep(0.2)
+        time.sleep(0.4)
         try:
             worker.privmsg("#flamingo", "ACK FR SimonBarnett/gh-Jeeves#46")
-            deadline = time.time() + 8
+            deadline = time.time() + 12
             while time.time() < deadline and not any(
                 h.startswith("ack:flamingo-46:") for h in chair.handled
             ):

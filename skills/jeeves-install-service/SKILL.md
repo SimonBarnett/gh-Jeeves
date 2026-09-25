@@ -30,7 +30,18 @@ Copy `config/bobjeeves.example.json` → `config/bobjeeves.json` (or
 `%USERPROFILE%\.agentic-irc-jeeves\bobjeeves.json`) and fill:
 
 - `irc_host` / `irc_port` / `tls`
-- `nick`, `sasl_user`, `sasl_password_file` (path only — secret never in cmdline)
+- **Auth (FR #72):**
+  - **Server-password (ionos live):** leave `sasl_user` empty; set `password_file`
+    to the Ergo server password path. Installer sets `AGENTIC_IRC_PASSWORD_FILE`
+    on the service (LocalSystem cannot use your user profile fallback alone —
+    expand to an absolute path operators can read as SYSTEM, or place the file
+    where SYSTEM can read it).
+  - **SASL:** set `sasl_user` + `sasl_password_file` instead.
+- **Receiver secret (FR #72):** `receiver_secret_file` → nssm
+  `BOB_CALLBACK_SECRET_FILE` for `X-Bob-Secret` (e.g. `…\.grok\bob\report.secret`).
+  Without this, LocalSystem will not see a user-home secret.
+- **Resync (FR #72):** `disable_resync: true` adds `--no-resync` and
+  `JEEVES_RESYNC_DISABLE=1` (hosts without a GitHub token).
 - `receiver_port` (default **19781**)
 - `jeeves_home` / `digest_home` (must differ)
 
@@ -51,11 +62,13 @@ Exit codes: `0` ok, `2` validation errors.
 ## Apply checklist (human / ionos)
 
 1. DryRun: confirm `service_cmdline` has host, port, `--tls`, receiver **19781**, `no_bobircd_dependency`.
-2. Elevated `-Apply -Production`.
-3. `Get-Service BobJeeves` — starting it must **not** start BobIrcd.
-4. Disable task `BobJeeves-chair` after healthy.
-5. IIS proxies `https://irc.ntsa.uk/bob/v1/*` → `127.0.0.1:19781`.
-6. **Outbox pos (FR #71 / cutover):** digest home may still have agentic_irc `chair-outbox.txt.pos`. gh-Jeeves writes `chair-outbox.pos`. First start **migrates** the legacy file; if neither exists and the outbox is non-empty, start is **EOF** (no replay flood to `#bobiverse`). Empty / whitespace / garbage / negative pos files are treated as missing (EOF park) — never as `0`. Do not pass `--replay-outbox` on production cutover unless operators intentionally want a full re-announce. See `docs/receiver-bobcallback-cutover.md`.
+2. DryRun JSON (FR #72): `receiver_secret_file`, `password_file` or SASL files, `auth_mode`,
+   `disable_resync` as needed — **no hand edits** to nssm env after Apply.
+3. Elevated `-Apply -Production`.
+4. `Get-Service BobJeeves` — starting it must **not** start BobIrcd.
+5. Disable task `BobJeeves-chair` after healthy.
+6. IIS proxies `https://irc.ntsa.uk/bob/v1/*` → `127.0.0.1:19781`.
+7. **Outbox pos (FR #71 / cutover):** digest home may still have agentic_irc `chair-outbox.txt.pos`. gh-Jeeves writes `chair-outbox.pos`. First start **migrates** the legacy file; if neither exists and the outbox is non-empty, start is **EOF** (no replay flood to `#bobiverse`). Empty / whitespace / garbage / negative pos files are treated as missing (EOF park) — never as `0`. Do not pass `--replay-outbox` on production cutover unless operators intentionally want a full re-announce. See `docs/receiver-bobcallback-cutover.md`.
 
 ## Forbidden
 
@@ -68,8 +81,9 @@ Exit codes: `0` ok, `2` validation errors.
 
 ```text
 pytest -q tests/test_install_fr48_cmdline.py tests/test_skill_install_service_fr17.py tests/test_outbox_pos_fr71.py
+python -m pytest tests/ -q
 ```
 
 ## Related
 
-- FR #48, #17, #39, #46, #71, agentic_build #330
+- FR #48, #17, #39, #46, #71, #72, agentic_build #330

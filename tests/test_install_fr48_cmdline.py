@@ -66,6 +66,11 @@ def test_example_config_exists():
     assert int(cfg.get("receiver_port") or 0) == 19781
     assert cfg.get("tls") is True
     assert "BobIrcd" in (cfg.get("never_depend_on") or [])
+    # FR #72: ionos-shaped auth + receiver secret + resync toggle keys
+    assert "password_file" in cfg
+    assert "receiver_secret_file" in cfg
+    assert "disable_resync" in cfg
+    assert cfg.get("sasl_user") in ("", None)
 
 
 def test_production_dryrun_cmdline_has_host_port_tls():
@@ -126,6 +131,63 @@ def test_hydrate_sasl_password_file(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGENTIC_IRC_SASL_PASSWORD_FILE", str(secret))
     hydrate_secrets_from_files()
     assert os.environ.get("AGENTIC_IRC_SASL_PASSWORD") == "s3cret-line"
+
+
+def test_hydrate_server_password_file(tmp_path: Path, monkeypatch):
+    """FR #72: non-SASL Ergo server password via AGENTIC_IRC_PASSWORD_FILE."""
+    from jeeves.env_secrets import hydrate_secrets_from_files
+
+    secret = tmp_path / "server.pass"
+    secret.write_text("ergo-server-pw\n", encoding="utf-8")
+    monkeypatch.delenv("AGENTIC_IRC_PASSWORD", raising=False)
+    monkeypatch.delenv("AGENTIC_IRC_SASL_PASSWORD", raising=False)
+    monkeypatch.setenv("AGENTIC_IRC_PASSWORD_FILE", str(secret))
+    hydrate_secrets_from_files()
+    assert os.environ.get("AGENTIC_IRC_PASSWORD") == "ergo-server-pw"
+
+
+def test_install_dryrun_receiver_secret_and_password_and_no_resync(tmp_path: Path):
+    """FR #72: DryRun surfaces receiver_secret_file, password auth, disable_resync."""
+    cfg = {
+        "topology": "combined",
+        "nick": "Jeeves",
+        "irc_host": "irc.ntsa.uk",
+        "irc_port": 6697,
+        "tls": True,
+        "sasl_user": "",
+        "sasl_password_file": "",
+        "password_file": str(tmp_path / "pw.txt"),
+        "receiver_secret_file": str(tmp_path / "bob.secret"),
+        "receiver_port": 19781,
+        "jeeves_home": str(tmp_path / "jeeves"),
+        "digest_home": str(tmp_path / "digest"),
+        "disable_resync": True,
+        "never_depend_on": ["BobIrcd"],
+    }
+    (tmp_path / "pw.txt").write_text("x\n", encoding="utf-8")
+    (tmp_path / "bob.secret").write_text("sec\n", encoding="utf-8")
+    cfg_path = tmp_path / "bobjeeves.json"
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    plan = _run_install("-ConfigPath", str(cfg_path), "-Production")
+    assert plan.get("_exit_code") == 0, plan
+    assert plan.get("ok") is True
+    assert plan.get("disable_resync") is True
+    assert plan.get("auth_mode") == "server_password"
+    assert str(plan.get("password_file") or "").endswith("pw.txt")
+    assert str(plan.get("receiver_secret_file") or "").endswith("bob.secret")
+    args = " ".join(str(a) for a in (plan.get("python_args") or []))
+    assert "--no-resync" in args
+    # source must set BOB_CALLBACK_SECRET_FILE on Apply path
+    text = (ROOT / "tools" / "Install-BobJeeves.ps1").read_text(encoding="utf-8")
+    assert "BOB_CALLBACK_SECRET_FILE" in text
+    assert "JEEVES_RESYNC_DISABLE" in text
+
+
+def test_g1_tls_fixture_exists():
+    """FR #72: pre-generated certs so Windows without openssl still runs G1 TLS."""
+    d = ROOT / "tests" / "fixtures" / "g1_tls"
+    assert (d / "g1.pem").is_file()
+    assert (d / "g1.key").is_file()
 
 
 def test_receiver_default_is_19781():

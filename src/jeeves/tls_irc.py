@@ -473,11 +473,29 @@ def make_self_signed_cert(dir_path: Path) -> tuple[Path, Path]:
         return cert, key
     except ImportError:
         pass
+    # FR #72: stock Windows often has no openssl on PATH. Prefer shipped fixture;
+    # only call openssl if present; otherwise skip-friendly error (tests skip).
+    import shutil
     import subprocess
 
+    fixture_dir = Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures" / "g1_tls"
+    f_cert = fixture_dir / "g1.pem"
+    f_key = fixture_dir / "g1.key"
+    if f_cert.is_file() and f_key.is_file():
+        cert.write_bytes(f_cert.read_bytes())
+        key.write_bytes(f_key.read_bytes())
+        return cert, key
+
+    openssl = shutil.which("openssl")
+    if not openssl:
+        raise RuntimeError(
+            "G1 TLS cert generation needs the cryptography package, "
+            "tests/fixtures/g1_tls/{g1.pem,g1.key}, or openssl on PATH "
+            "(Git usr\\bin is not assumed). FR #72."
+        )
     subprocess.run(
         [
-            "openssl",
+            openssl,
             "req",
             "-x509",
             "-newkey",
