@@ -30,7 +30,7 @@ In agentic_irc, the bob-{machine} ear implements `!bored` → offer (one at a ti
 ## Phase 5: cut-over and clean-up
 
 - Remove the chair code from agentic_irc, leaving a thin shim that errors "moved to gh-Jeeves".
-- Update the skills (bob-jeeves-chair, bob-git-accept-claim, bob-token-efficient-handoff) and the agentic_build README diagrams 2–4 so they stop saying "Jeeves offers".
+- Update the skills (bob-jeeves-chair, bob-git-accept, bob-token-handoff) and the agentic_build README diagrams 2–4 so they say **Jeeves assigns** (FR #11 / K10; gh-Jeeves README is SoT).
 - Fix the duplicate `reportUrl` key.
 
 ## Phase 6: ops
