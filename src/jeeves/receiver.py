@@ -42,12 +42,27 @@ class DigestState:
 
     def snapshot(self) -> dict[str, Any]:
         q = load_queue(self.home)
-        return {
+        snap: dict[str, Any] = {
             "queue": q,
             "announces": list(self.announces),
             "events": list(self.events),
             "workers": q.get("workers") or {},
         }
+        # K5 / FR #6: surface running version + drift (stamp file or live resolve)
+        stamp = self.home / "jeeves_version.json"
+        if stamp.is_file():
+            try:
+                snap.update(json.loads(stamp.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                pass
+        else:
+            try:
+                from .versioning import version_report_payload
+
+                snap.update(version_report_payload())
+            except Exception:
+                pass
+        return snap
 
 
 def make_handler(state: DigestState):
