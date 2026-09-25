@@ -27,12 +27,23 @@ def legacy_pos_path(home: Path) -> Path:
 
 
 def _read_pos_file(path: Path) -> int | None:
+    """Return byte offset, or None if missing/unreadable/empty/non-integer.
+
+    Empty or whitespace-only files must NOT become 0 — that would replay the
+    whole outbox on cutover (FR #71). Treat them as absent so resolve can park
+    at EOF when the outbox is non-empty.
+    """
     if not path.is_file():
         return None
     try:
-        raw = path.read_text(encoding="utf-8").strip() or "0"
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
         return int(raw)
-    except (OSError, ValueError):
+    except ValueError:
         return None
 
 

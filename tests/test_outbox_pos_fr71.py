@@ -155,3 +155,89 @@ def test_cli_has_replay_outbox_flag():
     assert args.replay_outbox is True
     args2 = _parse(["chair", "--port", "6667"])
     assert args2.replay_outbox is False
+
+
+def test_empty_canonical_pos_does_not_replay(tmp_path: Path):
+    """Empty chair-outbox.pos must not become offset 0 (full #bobiverse flood)."""
+    home = tmp_path
+    body = b"PRIVMSG #bobiverse :would-flood\n" * 30
+    (home / "chair-outbox.txt").write_bytes(body)
+    (home / POS_NAME).write_text("", encoding="utf-8")
+    start = resolve_outbox_start(home, outbox_size=len(body), replay=False)
+    assert start == len(body)
+    assert int((home / POS_NAME).read_text(encoding="utf-8").strip()) == len(body)
+
+
+def test_whitespace_and_garbage_pos_park_eof(tmp_path: Path):
+    home = tmp_path
+    body = b"PRIVMSG #bobiverse :x\n" * 5
+    (home / "chair-outbox.txt").write_bytes(body)
+    (home / POS_NAME).write_text("   \n", encoding="utf-8")
+    assert resolve_outbox_start(home, outbox_size=len(body)) == len(body)
+    (home / POS_NAME).unlink()
+    (home / LEGACY_POS_NAME).write_text("not-a-number", encoding="utf-8")
+    assert resolve_outbox_start(home, outbox_size=len(body)) == len(body)
+
+
+def test_negative_pos_clamps_to_zero_then_eof_if_needed(tmp_path: Path):
+    home = tmp_path
+    (home / "chair-outbox.txt").write_bytes(b"abc")
+    write_pos(home, -12)
+    # written as max(0, -12)=0 via write_pos; resolve keeps 0 for non-empty
+    # (explicit operator write). Negative only from corrupt raw file:
+    (home / POS_NAME).write_text("-5", encoding="utf-8")
+    assert resolve_outbox_start(home, outbox_size=3) == 0
+
+
+def test_empty_home_seeds_zero_no_outbox_file(tmp_path: Path):
+    home = tmp_path
+    start = resolve_outbox_start(home, outbox_size=0, replay=False)
+    assert start == 0
+    assert (home / POS_NAME).read_text(encoding="utf-8").strip() == "0"
+
+
+def test_resolve_reads_size_from_disk_when_omitted(tmp_path: Path):
+    home = tmp_path
+    body = b"PRIVMSG #bobiverse :hist\n" * 10
+    (home / "chair-outbox.txt").write_bytes(body)
+    start = resolve_outbox_start(home, replay=False)
+    assert start == len(body)
+
+
+def test_mid_line_offset_drains_remainder_only(tmp_path: Path):
+    """Pos in the middle of a line: drain from that byte; no full-file replay."""
+    home = tmp_path
+    lines = [
+        "PRIVMSG #bobiverse :sent-already",
+        "PRIVMSG #bobiverse :partial-start-ok",
+        "PRIVMSG #bobiverse :tail",
+    ]
+    raw = ("\n".join(lines) + "\n").encode("utf-8")
+    (home / "chair-outbox.txt").write_bytes(raw)
+    # land inside second line after first newline
+    cut = raw.find(b"partial")
+    assert cut > 0
+    write_pos(home, cut)
+    client = _FakeClient()
+    chair = JeevesChair(
+        "127.0.0.1",
+        1,
+        home,
+        "http://127.0.0.1:9",
+        client=client,
+        auto_join=False,
+    )
+    chair._drain_outbox()
+    texts = [t for _, t in client.msgs]
+    assert "sent-already" not in texts
+    assert any("partial" in t or "tail" in t for t in texts)
+    assert len(texts) <= 2
+
+
+def test_replay_ignored_when_canonical_pos_exists(tmp_path: Path):
+    """--replay-outbox only applies when no usable pos file (CLI help contract)."""
+    home = tmp_path
+    body = b"PRIVMSG #bobiverse :a\nPRIVMSG #bobiverse :b\n"
+    (home / "chair-outbox.txt").write_bytes(body)
+    write_pos(home, len(body))
+    assert resolve_outbox_start(home, outbox_size=len(body), replay=True) == len(body)
