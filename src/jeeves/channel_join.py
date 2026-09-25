@@ -175,16 +175,30 @@ class AutoJoinController:
             self.state.kick_attempts.pop(c.lower(), None)
 
     def _finish_list(self) -> None:
+        import logging
+
+        from .service_log import event as slog
+
         self._listing = False
         listed = set(self._list_buf)
         self._list_buf.clear()
         self.state.last_list_channels = set(listed)
         self.state.list_runs += 1
+        slog(
+            logging.getLogger("jeeves.autojoin"),
+            "list",
+            channels=len(listed),
+            run=self.state.list_runs,
+        )
         to_join = channels_to_join(listed, self.state, seed=self.seed)
         for ch in to_join:
             self._do_join(ch)
 
     def _do_join(self, channel: str) -> None:
+        import logging
+
+        from .service_log import event as slog
+
         ch = normalize_channel(channel)
         if should_skip_channel(ch, denylist=self.state.denylist):
             return
@@ -194,9 +208,11 @@ class AutoJoinController:
             self.client.join(ch)
         except OSError:
             self.state.events.append(f"join_fail:{ch}")
+            slog(logging.getLogger("jeeves.autojoin"), "join_fail", channel=ch)
             return
         self.state.joined.add(ch)
         self.state.events.append(f"join:{ch}")
+        slog(logging.getLogger("jeeves.autojoin"), "join", channel=ch)
         if self.on_join:
             try:
                 self.on_join(ch)
@@ -212,11 +228,16 @@ class AutoJoinController:
             self.state.events.append("list_fail")
 
     def _on_kicked(self, channel: str) -> None:
+        import logging
+
+        from .service_log import event as slog
+
         ch = normalize_channel(channel)
         self.state.joined.discard(ch)
         # also case-insensitive discard
         self.state.joined = {x for x in self.state.joined if x.lower() != ch.lower()}
         key = ch.lower()
+        slog(logging.getLogger("jeeves.autojoin"), "part", channel=ch, reason="kick")
         if key in self.state.hard_fail:
             return
         n = int(self.state.kick_attempts.get(key, 0)) + 1

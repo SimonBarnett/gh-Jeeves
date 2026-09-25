@@ -125,6 +125,20 @@ class TlsIrcClient:
         self._connect_and_register()
 
     def _connect_and_register(self) -> None:
+        import logging
+
+        from .service_log import event as slog
+
+        log = logging.getLogger("jeeves.irc")
+        tls_flag = "1" if self.tls else "0"
+        slog(
+            log,
+            "connect",
+            host=self.host,
+            port=self.port,
+            tls=tls_flag,
+            nick=self.nick,
+        )
         if self.tls:
             self.sock = connect_tls(
                 self.host,
@@ -141,6 +155,7 @@ class TlsIrcClient:
         self.sock.settimeout(0.5)
         self.buf = ""
         # CAP/SASL + FR #52 identity (account-notify / extended-join)
+        # Never log password or SASL token material (FR #73).
         if self.sasl_user and self.sasl_password:
             self._send("CAP LS 302")
             self._send("NICK " + self.nick)
@@ -155,9 +170,13 @@ class TlsIrcClient:
             ).decode("ascii")
             self._send("AUTHENTICATE " + token)
             self._send("CAP END")
+            slog(log, "auth", method="sasl", user=self.sasl_user, result="sent")
         else:
             if self.password:
                 self._send("PASS " + self.password)
+                slog(log, "auth", method="pass", result="sent")
+            else:
+                slog(log, "auth", method="none", result="ok")
             self._send("NICK " + self.nick)
             self._send(f"USER {self.nick} 0 * :{self.nick}")
             # still request identity CAPs when present (Ergo may grant without SASL)
@@ -166,6 +185,7 @@ class TlsIrcClient:
             self._send("CAP REQ :account-notify extended-join")
             self._send("CAP END")
         self._drain_until(lambda: True, timeout=3.0)
+        slog(log, "auth", nick=self.nick, result="registered")
 
     def reconnect(self, *, attempt: int | None = None) -> float:
         """Close and reconnect. Returns backoff seconds applied."""

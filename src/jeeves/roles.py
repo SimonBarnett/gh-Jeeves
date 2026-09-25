@@ -70,6 +70,45 @@ from .wire import (
 log = logging.getLogger("jeeves.chair")
 
 
+def _log_announce(logger: logging.Logger, text: str) -> None:
+    """FR #73: event=announce with repo#n and mode when parseable."""
+    import re
+
+    m = re.search(
+        r"(?i)\b(opened|closed|merged|reopened|synchronize|ready_for_review)?\s*"
+        r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b",
+        text or "",
+    )
+    if m:
+        mode = (m.group(1) or "git").lower()
+        logger.info(
+            "event=announce repo=%s#%s mode=%s",
+            m.group(2),
+            m.group(3),
+            mode,
+        )
+    else:
+        # still one line; no full body dump
+        snippet = (text or "")[:80].replace("\n", " ")
+        logger.info("event=announce mode=other text=%s", snippet)
+
+# FR #73: announce line → event=announce repo=#n mode=...
+_ANNOUNCE_REPO = __import__("re").compile(
+    r"(?i)\b((?:[A-Za-z0-9_.-]+/)?[A-Za-z0-9_.-]+)#(\d+)\b"
+)
+_ANNOUNCE_MODE = __import__("re").compile(r"\b(FR|MRB|UAT|PR)\b", __import__("re").I)
+
+
+def _log_announce_line(text: str) -> None:
+    """One INFO per announce; never log full body if it might hold secrets."""
+    m = _ANNOUNCE_REPO.search(text or "")
+    mode_m = _ANNOUNCE_MODE.search(text or "")
+    repo = m.group(1) if m else "?"
+    num = m.group(2) if m else "?"
+    mode = mode_m.group(1).upper() if mode_m else "GIT"
+    log.info("event=announce repo=%s#%s mode=%s", repo, num, mode)
+
+
 class JeevesChair:
     """
     Drains chair-outbox to #bobiverse; silent ACK/DONE listener in shops.
@@ -269,9 +308,12 @@ class JeevesChair:
                     text = parts[2][1:] if parts[2].startswith(":") else parts[2]
                     self._outbox.put(target, text)
                     self.handled.append(f"announce:{text}")
+                    # FR #73: one INFO per announce (repo#n + mode if present)
+                    _log_announce_line(text)
             else:
                 self._outbox.put("#bobiverse", line)
                 self.handled.append(f"announce:{line}")
+                _log_announce_line(line)
         write_pos(self.home, len(data))
 
     def _handle_list(self, src: str, text: str) -> None:
@@ -289,6 +331,11 @@ class JeevesChair:
         for line in lines:
             self._pm(src, line)
         self.handled.append(f"list_pm:{src}:{len(lines)}")
+        log.info(
+            "event=cmd name=list nick=%s replies=%s",
+            src,
+            len(lines),
+        )
         log.info("cmd=list nick=%s replies=%s", src, len(lines))
 
     def _handle_help(self, src: str, text: str) -> None:
@@ -579,6 +626,12 @@ class JeevesChair:
                     self.handled.append(f"ack_report_err:{src}")
                     log.warning("cmd=ack nick=%s report_err=%s", src, type(e).__name__)
                 self.handled.append(f"ack:{src}:{ack.repo}#{ack.number}")
+                log.info(
+                    "event=ack nick=%s job=%s#%s mode=FR",
+                    src,
+                    ack.repo,
+                    ack.number,
+                )
                 log.info("cmd=ack nick=%s repo=%s#%s", src, ack.repo, ack.number)
             else:
                 self.handled.append(f"ack_no_match:{src}:{ack.repo}#{ack.number}")
@@ -614,6 +667,13 @@ class JeevesChair:
             )
             self._post_report({"op": "worker_state", "nick": src, "state": "idle"})
             self.handled.append(f"done:{src}:{done.repo}#{done.number}:{st}")
+            log.info(
+                "event=done nick=%s job=%s#%s mode=%s",
+                src,
+                done.repo,
+                done.number,
+                (done.task or "FR").upper(),
+            )
             log.info("cmd=done nick=%s repo=%s#%s", src, done.repo, done.number)
             return
 

@@ -177,6 +177,12 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["JEEVES_HOME"] = str(jh)
     os.environ["AGENTIC_IRC_HOME"] = str(jh)
 
+    # FR #73: rotating bobjeeves-service.log (connect/auth/joins/LIST/cmds)
+    from .service_log import configure_service_logging
+
+    log_path = configure_service_logging(jh)
+    print(f"INFO service_log {log_path}", flush=True)
+
     # K5: stamp running version for webhook drift (FR #6)
     try:
         from .versioning import write_version_stamp
