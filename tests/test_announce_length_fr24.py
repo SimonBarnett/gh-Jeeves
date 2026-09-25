@@ -11,11 +11,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from gh_jeeves import announce as an  # noqa: E402
+from jeeves import length_safe as an  # noqa: E402
 
 
 def test_long_title_one_line_under_512_vital_present_title_truncated():
-    """AC1: 300-char title + long repo → one line ≤512 wire bytes; vital parse; title truncated."""
+    """AC1: 300-char title + long repo â†’ one line â‰¤512 wire bytes; vital parse; title truncated."""
     repo = "SimonBarnett/" + ("very-long-repo-name-segment-" * 3) + "end"
     assert len(repo) > 40
     title = "T" * 300
@@ -39,7 +39,7 @@ def test_long_title_one_line_under_512_vital_present_title_truncated():
     assert parsed.url == vital.url or an.short_url(parsed.url) == an.short_url(vital.url)
     assert res.truncated_title or len(parsed.title) < 300
     assert "..." in res.line or len(parsed.title) < 300
-    # single line — no continuation marker
+    # single line â€” no continuation marker
     assert "\n" not in res.line
     ok, err = an.validate_before_send(res)
     assert ok, err
@@ -48,7 +48,7 @@ def test_long_title_one_line_under_512_vital_present_title_truncated():
 def test_multibyte_emoji_never_cut_mid_codepoint():
     """AC2: multibyte/emoji titles never cut mid-codepoint."""
     # each emoji is 4-byte UTF-8
-    title = "hello " + ("🎯" * 80) + " world"
+    title = "hello " + ("ðŸŽ¯" * 80) + " world"
     vital = an.VitalFields(
         event="issues",
         task="FR",
@@ -77,7 +77,7 @@ def test_round_trip_property_random_titles_repos():
         owner = "O" + "".join(rng.choice(string.ascii_lowercase) for _ in range(rng.randint(3, 12)))
         name = "R" + "".join(rng.choice(string.ascii_lowercase + "-") for _ in range(rng.randint(5, 40)))
         num = rng.randint(1, 9999)
-        title = "".join(rng.choice(string.ascii_letters + " 🎯é") for _ in range(rng.randint(0, 250)))
+        title = "".join(rng.choice(string.ascii_letters + " ðŸŽ¯Ã©") for _ in range(rng.randint(0, 250)))
         vital = an.VitalFields(
             event="issues",
             task="FR",
@@ -94,7 +94,7 @@ def test_round_trip_property_random_titles_repos():
 
 
 def test_vital_overflow_emits_compact_still_parses():
-    """AC4: vital fields alone over budget → compact form still parses."""
+    """AC4: vital fields alone over budget â†’ compact form still parses."""
     # Force tiny budget via absurd nick/userhost/channel lengths? Better: huge ref+url
     repo = "SimonBarnett/" + ("x" * 200)
     vital = an.VitalFields(
@@ -118,7 +118,7 @@ def test_vital_overflow_emits_compact_still_parses():
 
 
 def test_simulated_417_logs_and_queue_still_has_item():
-    """AC5: simulated 417 → error logged; queue item still exists from webhook path."""
+    """AC5: simulated 417 â†’ error logged; queue item still exists from webhook path."""
     logs: list[str] = []
     q = an.MemoryQueue()
     vital = an.VitalFields(
@@ -136,7 +136,7 @@ def test_simulated_417_logs_and_queue_still_has_item():
     msg = an.simulate_417(line, log=logs.append)
     assert "417" in msg
     assert any("417" in x for x in logs)
-    # queue still present — never depended on IRC success
+    # queue still present â€” never depended on IRC success
     assert q.has_ref("SimonBarnett/gh-Jeeves#24")
     assert any(i.kind == "git" for i in q.items)
 
@@ -224,7 +224,7 @@ def test_offer_and_list_rows_single_line_vital():
 
 
 def test_token_less_import_surface():
-    """AC6: token-less — pure functions, no network/LLM imports in announce module."""
-    src = (ROOT / "src" / "gh_jeeves" / "announce.py").read_text(encoding="utf-8")
+    """AC6: token-less â€” pure functions, no network/LLM imports in announce module."""
+    src = (ROOT / "src" / "jeeves" / "length_safe.py").read_text(encoding="utf-8")
     for banned in ("openai", "anthropic", "requests", "httpx", "urllib.request", "socket"):
         assert banned not in src
