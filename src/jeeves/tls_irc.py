@@ -13,6 +13,7 @@ import socket
 import ssl
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Callable
 
@@ -20,6 +21,8 @@ from .backoff import is_throttle_error, throttle_delay_s
 from .local_ircd import LocalIrcd
 
 FLOOD_S = 0.8
+# issue #74: bound raw line retention for the life of the service
+RAW_INBOX_MAX = 500
 
 
 def build_ssl_context(
@@ -114,7 +117,7 @@ class TlsIrcClient:
         self.sock: socket.socket | None = None
         self.buf = ""
         self.inbox: list[tuple[str, str, str]] = []
-        self.raw_inbox: list[str] = []
+        self.raw_inbox: deque[str] = deque(maxlen=RAW_INBOX_MAX)
         self.on_raw: Callable[[str], None] | None = None
         self._lock = threading.Lock()
         self.reconnect_count = 0
@@ -196,9 +199,11 @@ class TlsIrcClient:
             self._send(f"JOIN {ch}")
             time.sleep(min(0.05, self.flood_s))
 
-    def privmsg(self, target: str, text: str) -> None:
+    def privmsg(self, target: str, text: str, *, pace: bool = True) -> None:
+        """Send PRIVMSG. pace=False when an OutboundFloodQueue already sleeps (#74)."""
         self._send(f"PRIVMSG {target} :{text}")
-        time.sleep(self.flood_s)
+        if pace and self.flood_s > 0:
+            time.sleep(self.flood_s)
 
     def _parse(self, line: str) -> None:
         if not line:

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import urllib.request
 from pathlib import Path
 
 from .channel_join import AutoJoinController, normalize_channel
+from .flood_queue import OutboundFloodQueue
 from .local_ircd import IrcClient
 from .mode_grants import ModeGrantController
 from .nicks import bored_gate, canonical_worker_nick, worker_shop_channel
@@ -45,6 +47,8 @@ from .wire import (
     is_ignore,
     is_ignored_list,
     is_list,
+    is_resync,
+    is_status,
     is_sweep,
     is_unignore,
     parse_ack,
@@ -53,6 +57,8 @@ from .wire import (
     parse_nack,
     parse_sweep,
 )  # noqa: F401
+
+log = logging.getLogger("jeeves.chair")
 
 
 class JeevesChair:
@@ -94,6 +100,22 @@ class JeevesChair:
         self.pm_egress: list[tuple[str, str]] = []  # (nick, text) help/list
         self.help_rate = HelpRateLimit()
         self.resync_scheduler = resync_scheduler
+        self._started = time.time()
+        # issue #74: pace outbound PRIVMSG on a side thread (once, not twice)
+        def _send_pm(target: str, text: str) -> None:
+            fn = getattr(self.client, "privmsg", None)
+            if fn is None:
+                return
+            try:
+                fn(target, text, pace=False)  # type: ignore[call-arg]
+            except TypeError:
+                fn(target, text)
+
+        flood = float(getattr(self.client, "flood_s", FLOOD_S) or FLOOD_S)
+        # local G1 client has no flood_s — still pace list PMs at FLOOD_S
+        if not hasattr(self.client, "flood_s"):
+            flood = FLOOD_S
+        self._outbox = OutboundFloodQueue(_send_pm, flood_s=flood)
         # FR #52: mode grants (+h bob / +o simon) — account-trusted, no channel text
         self.mode_grants: ModeGrantController | None = None
         if hasattr(self.client, "send_raw"):
@@ -147,9 +169,9 @@ class JeevesChair:
         assert chair_may_offer() is False
 
     def _pm(self, nick: str, text: str) -> None:
-        """Private message only (help/list). Never channel flood."""
+        """Private message only (help/list). Never channel flood. Non-blocking (#74)."""
         self.pm_egress.append((nick, text))
-        self.client.privmsg(nick, text)
+        self._outbox.put(nick, text)
 
     def _shop_privmsg(self, channel: str, text: str) -> None:
         """Chair must remain silent in shops (K1). Block claim/offer egress."""
@@ -157,9 +179,10 @@ class JeevesChair:
             self.handled.append(f"blocked_shop_egress:{channel}:{text[:80]}")
             return
         self.shop_egress.append((channel, text))
-        self.client.privmsg(channel, text)
+        self._outbox.put(channel, text)
 
     def start(self) -> None:
+        self._outbox.start()
         if self.resync_scheduler is not None:
             # rebuild task list on start (FR #25); scheduler owns periodic loop
             self.resync_scheduler.start(run_immediately=True)
@@ -170,6 +193,10 @@ class JeevesChair:
 
     def stop(self) -> None:
         self._stop.set()
+        try:
+            self._outbox.stop()
+        except Exception:
+            pass
         if self.auto_join_ctrl is not None:
             try:
                 self.auto_join_ctrl.stop()
@@ -231,10 +258,10 @@ class JeevesChair:
                 if len(parts) >= 3:
                     target = parts[1]
                     text = parts[2][1:] if parts[2].startswith(":") else parts[2]
-                    self.client.privmsg(target, text)
+                    self._outbox.put(target, text)
                     self.handled.append(f"announce:{text}")
             else:
-                self.client.privmsg("#bobiverse", line)
+                self._outbox.put("#bobiverse", line)
                 self.handled.append(f"announce:{line}")
         write_pos(self.home, len(data))
 
@@ -243,17 +270,17 @@ class JeevesChair:
         if not list_rate_ok(src):
             self._pm(src, list_rate_notice(src))
             self.handled.append(f"list_rate:{src}")
+            log.info("cmd=list nick=%s replies=1 rate_limited", src)
             return
         task_f, repo_f, list_all = parse_list_filters(text)
         lines = format_unaccepted_list(
             self.home, task_filter=task_f, repo_filter=repo_f, list_all=list_all
         )
-        # Pace under Ergo flood (one PM per FLOOD_S)
-        for i, line in enumerate(lines):
+        # Enqueue all lines; OutboundFloodQueue paces once (#74 — do not sleep here)
+        for line in lines:
             self._pm(src, line)
-            if i + 1 < len(lines) and FLOOD_S > 0:
-                time.sleep(FLOOD_S)
         self.handled.append(f"list_pm:{src}:{len(lines)}")
+        log.info("cmd=list nick=%s replies=%s", src, len(lines))
 
     def _handle_help(self, src: str, text: str) -> None:
         """FR #27: !help always answered by PM, never in channel."""
@@ -264,7 +291,74 @@ class JeevesChair:
         for line in result.lines:
             self._pm(src, line)
         self.handled.append(f"help:{src}:{arg or '*'}:{len(result.lines)}")
+        log.info("cmd=help nick=%s arg=%s replies=%s", src, arg or "*", len(result.lines))
 
+    def _handle_status(self, src: str) -> None:
+        """issue #74: !status PM snapshot (version, uptime, queue, workers)."""
+        counts = queue_counts(self.home)
+        q = load_queue(self.home)
+        workers = q.get("workers") or {}
+        busy = 0
+        idle = 0
+        if isinstance(workers, dict):
+            for w in workers.values():
+                st = str((w or {}).get("state") or "").lower() if isinstance(w, dict) else ""
+                if st == "busy":
+                    busy += 1
+                else:
+                    idle += 1
+        ver = "?"
+        try:
+            from .versioning import version_report_payload
+
+            ver = str(version_report_payload().get("version") or "?")
+        except Exception:
+            ver = "?"
+        uptime = int(max(0, time.time() - self._started))
+        last_resync = "n/a"
+        if self.resync_scheduler is not None and getattr(self.resync_scheduler, "last", None):
+            st = self.resync_scheduler.last
+            last_resync = (
+                f"quiet={getattr(st, 'quiet', False)} "
+                f"+{getattr(st, 'added', 0)}-{getattr(st, 'removed', 0)}"
+            )
+        lines = [
+            f"Jeeves status: version={ver} uptime_s={uptime}",
+            (
+                f"queue: unaccepted={counts.get('unaccepted', 0)} "
+                f"accepted={counts.get('accepted', 0)} done={counts.get('done', 0)}"
+            ),
+            f"workers: busy={busy} idle={idle} tracked={len(workers) if isinstance(workers, dict) else 0}",
+            f"last_resync: {last_resync}",
+        ]
+        for line in lines:
+            self._pm(src, line)
+        self.handled.append(f"status:{src}:{len(lines)}")
+        log.info("cmd=status nick=%s replies=%s", src, len(lines))
+
+    def _handle_resync(self, src: str) -> None:
+        """issue #74 / FR #25: !resync — bob-* or simon only."""
+        n = (src or "").strip().lower()
+        if n != "simon" and not n.startswith("bob-"):
+            self.handled.append(f"resync_denied:{src}")
+            log.info("cmd=resync nick=%s denied", src)
+            return
+        if self.resync_scheduler is None:
+            self._pm(src, "resync unavailable (no scheduler)")
+            self.handled.append(f"resync_nosched:{src}")
+            log.info("cmd=resync nick=%s replies=1 nosched", src)
+            return
+        try:
+            stats = self.resync_scheduler.run_once()
+            total = sum(queue_counts(self.home).values())
+            body = stats.summary_line(total) if hasattr(stats, "summary_line") else "resync done"
+            self._pm(src, body)
+            self.handled.append(f"resync:{src}:ok")
+            log.info("cmd=resync nick=%s replies=1 ok", src)
+        except Exception as e:
+            self._pm(src, f"resync error: {type(e).__name__}")
+            self.handled.append(f"resync:{src}:err")
+            log.warning("cmd=resync nick=%s err=%s", src, type(e).__name__)
     def _handle_sweep(self, src: str, target: str, text: str) -> None:
         """FR #52: !sweep [channel] — simon + account simon only; no channel text."""
         ch = parse_sweep(text)
@@ -369,6 +463,12 @@ class JeevesChair:
         if is_list(text):
             self._handle_list(src, text)
             return
+        if is_status(text):
+            self._handle_status(src)
+            return
+        if is_resync(text):
+            self._handle_resync(src)
+            return
         if self._handle_ignore_cmds(src, text):
             return
         if is_sweep(text):
@@ -377,7 +477,11 @@ class JeevesChair:
         if not target.startswith("#"):
             if is_list(text):
                 self._handle_list(src, text)
-            if self._handle_ignore_cmds(src, text):
+            elif is_status(text):
+                self._handle_status(src)
+            elif is_resync(text):
+                self._handle_resync(src)
+            elif self._handle_ignore_cmds(src, text):
                 return
             return
         # silent shop: ACK / DONE only — never !bored, never OFFER/claim (K1)
@@ -418,9 +522,11 @@ class JeevesChair:
                             "job": job,
                         }
                     )
-                except Exception:
+                except Exception as e:
                     self.handled.append(f"ack_report_err:{src}")
+                    log.warning("cmd=ack nick=%s report_err=%s", src, type(e).__name__)
                 self.handled.append(f"ack:{src}:{ack.repo}#{ack.number}")
+                log.info("cmd=ack nick=%s repo=%s#%s", src, ack.repo, ack.number)
             else:
                 self.handled.append(f"ack_no_match:{src}:{ack.repo}#{ack.number}")
             return
@@ -430,6 +536,7 @@ class JeevesChair:
             st, row = nack_job(self.home, src, task, repo, number)
             self._post_report({"op": "worker_state", "nick": src, "state": "idle"})
             self.handled.append(f"nack:{src}:{repo}#{number}:{st}")
+            log.info("cmd=nack nick=%s repo=%s#%s", src, repo, number)
             return
         done = parse_done(text)
         if done:
@@ -454,13 +561,15 @@ class JeevesChair:
             )
             self._post_report({"op": "worker_state", "nick": src, "state": "idle"})
             self.handled.append(f"done:{src}:{done.repo}#{done.number}:{st}")
+            log.info("cmd=done nick=%s repo=%s#%s", src, done.repo, done.number)
             return
+
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
                 self._drain_outbox()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("drain_outbox_err=%s", type(e).__name__)
             try:
                 msg = self.client.wait_privmsg(timeout=0.3)
             except OSError:
@@ -480,8 +589,14 @@ class JeevesChair:
                 src, target, text = msg
                 try:
                     self._handle_shop(src, target, text)
-                except Exception:
-                    pass
+                except Exception as e:
+                    self.handled.append(f"handler_err:{src}:{type(e).__name__}")
+                    log.exception(
+                        "handler_err nick=%s target=%s err=%s",
+                        src,
+                        target,
+                        type(e).__name__,
+                    )
             time.sleep(0.05)
 
 
