@@ -28,12 +28,24 @@ from .cast_iron import (
     shop_egress_allowed_for_chair,
 )
 from .helpcmd import HelpRateLimit, build_help, parse_help
+from .ignore import (
+    format_ignored_lines,
+    handle_ignore_add,
+    handle_unignore,
+    is_ignored_cmd,
+    may_mutate_ignore,
+    parse_ignore_cmd,
+    parse_unignore_cmd,
+)
 from .listfmt import FLOOD_S, format_unaccepted_list, list_rate_notice, list_rate_ok
 from .wire import (
     is_bored,
     is_help,
+    is_ignore,
+    is_ignored_list,
     is_list,
     is_sweep,
+    is_unignore,
     parse_ack,
     parse_done,
     parse_list_filters,
@@ -270,6 +282,76 @@ class JeevesChair:
         granted = self.mode_grants.sweep_channel(ch, known)
         self.handled.append(f"sweep:{ch}:{len(granted)}")
 
+    def _simon_account(self) -> str | None:
+        """Services account for simon when mode_grants is wired; else None (tests)."""
+        if self.mode_grants is None:
+            return None
+        return (self.mode_grants.state.accounts.get("simon") or "").strip() or None
+
+    def _ops_account_for(self, nick: str) -> str | None:
+        n = (nick or "").strip().lower()
+        if self.mode_grants is None:
+            return None
+        if n == "simon" or n.startswith("simon-"):
+            return self._simon_account()
+        # bob-* ops: nick prefix is enough (fleet ear)
+        if n.startswith("bob-"):
+            return n
+        return (self.mode_grants.state.accounts.get(n) or "").strip() or None
+
+    def _handle_ignore_cmds(self, src: str, text: str) -> bool:
+        """FR #75: !ignore / !unignore / !ignored — PM replies only."""
+        if is_ignored_list(text) or is_ignored_cmd(text):
+            for line in format_ignored_lines(self.home):
+                self._pm(src, line)
+            self.handled.append(f"ignored_list:{src}")
+            return True
+        ign = parse_ignore_cmd(text)
+        if ign is not None or is_ignore(text):
+            if ign is None:
+                ign = ""
+            if not self._ignore_mutator_ok(src):
+                self._pm(src, "ignore: denied (simon or bob-* ops only)")
+                self.handled.append(f"ignore_denied:{src}")
+                return True
+            if not (ign or "").strip():
+                self._pm(src, "ignore: usage !ignore {repo}")
+                self.handled.append(f"ignore_usage:{src}")
+                return True
+            for line in handle_ignore_add(self.home, ign):
+                self._pm(src, line)
+            self.handled.append(f"ignore:{src}:{ign}")
+            return True
+        un = parse_unignore_cmd(text)
+        if un is not None or is_unignore(text):
+            if un is None:
+                un = ""
+            if not self._ignore_mutator_ok(src):
+                self._pm(src, "unignore: denied (simon or bob-* ops only)")
+                self.handled.append(f"unignore_denied:{src}")
+                return True
+            if not (un or "").strip():
+                self._pm(src, "unignore: usage !unignore {repo}")
+                self.handled.append(f"unignore_usage:{src}")
+                return True
+            for line in handle_unignore(self.home, un):
+                self._pm(src, line)
+            self.handled.append(f"unignore:{src}:{un}")
+            return True
+        return False
+
+    def _ignore_mutator_ok(self, src: str) -> bool:
+        """simon needs services account when mode_grants is live; bob-* is ops by nick."""
+        src_l = (src or "").strip().lower()
+        if src_l.startswith("bob-"):
+            return True
+        if src_l == "simon" or src_l.startswith("simon-"):
+            if self.mode_grants is None:
+                return may_mutate_ignore(src, account=None)
+            acct = (self._ops_account_for(src) or "").strip().lower()
+            return acct == "simon"
+        return False
+
     def _handle_shop(self, src: str, target: str, text: str) -> None:
         # !help from channel or PM → reply by PM only (no channel flood)
         if is_help(text) or parse_help(text)[0]:
@@ -278,12 +360,16 @@ class JeevesChair:
         if is_list(text):
             self._handle_list(src, text)
             return
+        if self._handle_ignore_cmds(src, text):
+            return
         if is_sweep(text):
             self._handle_sweep(src, target, text)
             return
         if not target.startswith("#"):
             if is_list(text):
                 self._handle_list(src, text)
+            if self._handle_ignore_cmds(src, text):
+                return
             return
         # silent shop: ACK / DONE only — never !bored, never OFFER/claim (K1)
         if is_bored(text):

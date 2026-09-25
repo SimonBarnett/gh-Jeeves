@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from .ignore import filter_rows_not_ignored
 from .queue import load_queue
 
 # Soft page size when not listing all; never silent — always emit +M more when truncated.
@@ -129,6 +130,9 @@ def format_unaccepted_list(
             rows.append(row)
     else:
         rows = unacc
+
+    # FR #75 / !focus: ignored repos never appear in !list regardless of priority.
+    rows = filter_rows_not_ignored(home, rows)
 
     if task_filter:
         tf = task_filter.upper()

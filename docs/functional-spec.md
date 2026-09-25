@@ -25,6 +25,7 @@ A release is not shippable unless G1 is green and G2 is recorded.
 6. Supersede: FR+PR → MRB; MRB PASS merged → UAT; PR closed unmerged → restore FR; issue closed → remove; issue reopened → re-add FR.
 7. MRB process: PASS merges and closes FR; FAIL one fix PR, merge both, FR stays open; only Bob stamps UAT.
 8. `!list` typed in-channel or by PM returns the queue **by PM only** (nothing in channel). Format `FR|MRB|UAT owner/repo#n title`. `!list all` includes accepted; `!list <repo>` filters; no silent row cap (page default 30 + explicit `... and M more`).
+8b. `!ignore {repo}` / `!unignore {repo}` / `!ignored` (FR #75): suppress a repo (`name` or `owner/name`, case-insensitive) from the whole process — no `#bobiverse` announce, no unaccepted/digest enqueue, no `!list` rows, no ear `!bored` offers, no supersede. `!ignore` purges queued items for that repo; `!unignore` resumes new events only (resync may re-add opens). List in `ignored.json` beside `queue.json`, token-less. Mutate: simon (logged-in services account) or ops (`bob-*`). `!ignored` open to anyone (PM). Ignored repos never appear under `!focus` priority either.
 9. Ergo ops: `bob-{machine}` op in `#{machine}`; `Jeeves` op in `#bobiverse`; simon ops only via fleet client cert (Ergo config owned elsewhere).
 10. Jeeves runs as its own Windows service.
 11. Worker busy/idle observable from ACK/DONE; wakes serialised; never mistaken for idle while a hidden run works.

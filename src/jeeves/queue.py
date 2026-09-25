@@ -278,6 +278,11 @@ def _remove_tasks_for_ids(
 
 def apply_queue_event(home: Path, claim: Claim) -> str:
     """Apply supersede rules (K4 / agentic_irc #207); return action tag."""
+    # FR #75: ignored repos never enqueue or supersede.
+    from .ignore import is_ignored
+
+    if is_ignored(home, claim.repo):
+        return "ignored"
     doc = load_queue(home)
     repo, task, ident = claim.repo, claim.task, _norm_ident(claim.id)
     pr_id = _norm_ident(claim.pr_id or (ident if task in ("MRB", "RESTORE_FR") else ""))
@@ -388,8 +393,12 @@ def unaccepted_tasks(home: Path) -> list[dict]:
 
 
 def top_unaccepted(home: Path) -> dict | None:
+    """Top unaccepted job for ear !bored offers. Skips ignored repos (FR #75 / !focus)."""
+    from .ignore import filter_rows_not_ignored
+
     doc = load_queue(home)
-    rows = sorted(doc["unaccepted"], key=lambda r: int(r.get("seq") or 0))
+    rows = sorted(doc.get("unaccepted") or [], key=lambda r: int(r.get("seq") or 0))
+    rows = filter_rows_not_ignored(home, rows)
     return rows[0] if rows else None
 
 

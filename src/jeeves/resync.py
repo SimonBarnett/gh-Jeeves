@@ -194,7 +194,12 @@ def _awaiting_uat(pr: dict[str, Any]) -> bool:
     return True
 
 
-def build_outstanding(client: GitHubClient, cfg: ResyncConfig | None = None) -> list[dict[str, Any]]:
+def build_outstanding(
+    client: GitHubClient,
+    cfg: ResyncConfig | None = None,
+    *,
+    home: Path | None = None,
+) -> list[dict[str, Any]]:
     """Deterministic outstanding tasks (same supersede rules as live engine)."""
     cfg = cfg or ResyncConfig()
     repos = client.list_repos()
@@ -204,6 +209,13 @@ def build_outstanding(client: GitHubClient, cfg: ResyncConfig | None = None) -> 
     if cfg.deny_repos:
         deny = {r.lower() for r in cfg.deny_repos}
         repos = [r for r in repos if r.lower() not in deny]
+    # FR #75: runtime ignore list (ignored.json) — skip entire repo in resync.
+    if home is not None:
+        from .ignore import ignored_list, repo_is_ignored
+
+        ign = ignored_list(Path(home))
+        if ign:
+            repos = [r for r in repos if not repo_is_ignored(r, ign)]
 
     rows: list[dict[str, Any]] = []
     for repo in repos:
@@ -310,6 +322,19 @@ def reconcile_queue(
     connected_nicks = connected_nicks or set()
     doc = load_queue(home)
     stats = DiffStats()
+
+    # FR #75: strip ignored repos from live queue during reconcile.
+    from .ignore import filter_rows_not_ignored, ignored_list, repo_is_ignored
+
+    ign = ignored_list(home)
+    if ign:
+        for bucket in ("unaccepted", "accepted"):
+            before_n = len(doc.get(bucket) or [])
+            doc[bucket] = filter_rows_not_ignored(home, list(doc.get(bucket) or []))
+            removed_n = before_n - len(doc[bucket])
+            if removed_n:
+                stats.removed += removed_n
+        desired = [r for r in desired if not repo_is_ignored(str(r.get("repo") or ""), ign)]
 
     desired_by_key = {_row_key(r): r for r in desired}
     desired_by_ident = {}
@@ -438,7 +463,7 @@ def run_resync(
     cfg = cfg or ResyncConfig()
     home = Path(home)
     try:
-        desired = build_outstanding(client, cfg)
+        desired = build_outstanding(client, cfg, home=home)
     except (URLError, HTTPError, OSError, TimeoutError) as exc:
         doc = load_queue(home)
         total = len(doc.get("unaccepted") or []) + len(doc.get("accepted") or [])

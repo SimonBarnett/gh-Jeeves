@@ -90,6 +90,41 @@ def _reg() -> tuple[CommandSpec, ...]:
             ),
             related=("help", "status"),
         ),
+        CommandSpec(
+            name="ignore",
+            syntax="!ignore {repo}",
+            summary="suppress a repo from the whole Jeeves process (simon/ops)",
+            roles=frozenset({ROLE_BOB, ROLE_SIMON}),
+            example="!ignore SimonBarnett/old-sandbox",
+            details=(
+                "FR #75: adds owner/name or bare name to ignored.json (alongside queue.json). "
+                "Ignored repos get no #bobiverse announce, no queue/digest enqueue, no !list "
+                "rows, no ear offers, no supersede. Also purges already-queued items for that repo. "
+                "Works token-less. Interacts with !focus: ignored never appears regardless of priority."
+            ),
+            related=("ignored", "unignore", "list"),
+        ),
+        CommandSpec(
+            name="ignored",
+            syntax="!ignored",
+            summary="list ignored repos by PM (open to anyone)",
+            roles=ALL_ROLES,
+            example="!ignored",
+            details="FR #75: replies by PM with the current ignore list (or ignored: (none)).",
+            related=("ignore", "unignore", "list"),
+        ),
+        CommandSpec(
+            name="unignore",
+            syntax="!unignore {repo}",
+            summary="resume handling a previously ignored repo (simon/ops)",
+            roles=frozenset({ROLE_BOB, ROLE_SIMON}),
+            example="!unignore old-sandbox",
+            details=(
+                "FR #75: removes the repo from ignored.json. New events are handled again; "
+                "GitHub resync may re-add open items. Does not rebuild history by itself."
+            ),
+            related=("ignore", "ignored", "resync"),
+        ),
     )
 
 
