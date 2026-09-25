@@ -64,3 +64,10 @@ the release / FR #39 comment thread.
 
 - [ ] WHOIS Jeeves shows #bobiverse plus every current #{machine} shop
 - [ ] New shop channel appears in WHOIS within one LIST poll (~60s)
+
+## Operator note (FR #55, merged PR #59)
+
+After deploy, confirm with `WHOIS Jeeves` that every live `#{machine}` shop plus `#bobiverse` appear. New shops appear within one re-LIST interval (default 60s). Denylist is config-only; never edit Ergo `ircd.yaml` for joins.
+
+See `docs/g2-live-smoke-checklist.md` (FR #55 section) and `jeeves.channel_join.AutoJoinController`.
+
