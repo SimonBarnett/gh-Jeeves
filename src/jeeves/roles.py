@@ -10,14 +10,13 @@ from pathlib import Path
 
 from .local_ircd import IrcClient
 from .nicks import bored_gate, canonical_worker_nick, worker_shop_channel
+from .offer import EarOfferState, contains_assign, is_single_line
 from .queue import (
     accept_job,
     complete_job,
-    format_offer,
     load_queue,
     nack_job,
     queue_counts,
-    top_unaccepted,
     worker_state,
 )
 from .cast_iron import (
@@ -26,7 +25,7 @@ from .cast_iron import (
     is_forbidden_shop_egress,
     shop_egress_allowed_for_chair,
 )
-from .wire import is_bored, is_list, parse_ack, parse_done, parse_nack
+from .wire import is_bored, is_list, parse_ack, parse_done, parse_nack  # noqa: F401
 
 
 class JeevesChair:
@@ -258,7 +257,9 @@ class BobEar:
         self._stop = threading.Event()
         self._t = threading.Thread(target=self._run, name="bob-ear", daemon=True)
         self.offers: list[str] = []
-        self.open_offer: dict[str, dict] = {}  # nick -> row
+        self.offer_state = EarOfferState()
+        # back-compat alias for tests that read open_offer
+        self.open_offer = self.offer_state.open
 
     def start(self) -> None:
         self._t.start()
@@ -268,6 +269,14 @@ class BobEar:
         self.client.close()
         self._t.join(timeout=2.0)
 
+    def _emit_offer_line(self, line: str) -> None:
+        """K11: only single-line OFFER; never multi-line ASSIGN."""
+        if contains_assign(line) or not is_single_line(line):
+            self.offers.append(f"blocked_bad_line:{line[:40]}")
+            return
+        self.client.privmsg(self.shop, line)
+        self.offers.append(line)
+
     def _run(self) -> None:
         while not self._stop.is_set():
             msg = self.client.wait_privmsg(timeout=0.3)
@@ -275,6 +284,13 @@ class BobEar:
                 continue
             src, target, text = msg
             if target.lower() != self.shop:
+                continue
+            # Clear open offer on ACK/DONE so worker can take another job later
+            if parse_ack(text) and bored_gate(self.home, src, target, skip_idle_check=True) == "ok":
+                self.offer_state.on_worker_ack(src)
+                continue
+            if parse_done(text) and bored_gate(self.home, src, target, skip_idle_check=True) == "ok":
+                self.offer_state.on_worker_done(src)
                 continue
             if not is_bored(text):
                 continue
@@ -288,17 +304,16 @@ class BobEar:
             shop = worker_shop_channel(src)
             if shop != self.shop:
                 continue
-            if worker_state(self.home, src) == "busy":
-                self.client.privmsg(self.shop, f"{src}: NAK busy")
-                continue
-            if src in self.open_offer:
-                # one open offer per worker
-                continue
-            row = top_unaccepted(self.home)
-            if not row:
-                self.client.privmsg(self.shop, f"{src}: no jobs")
-                continue
-            line = format_offer(src, row)
-            self.client.privmsg(self.shop, line)
-            self.offers.append(line)
-            self.open_offer[src] = row
+            # K11: one single-line OFFER per worker, busy-gated; ear owns offer (not ASSIGN)
+            decision = self.offer_state.decide(self.home, src, machine=self.machine)
+            if decision.action == "offer" and decision.line:
+                self._emit_offer_line(decision.line)
+            elif decision.action == "nak_busy" and decision.line:
+                self._emit_offer_line(decision.line)
+            elif decision.action == "no_jobs" and decision.line:
+                self._emit_offer_line(decision.line)
+            elif decision.action == "nak_open":
+                # silent: already have one open offer — do not stack multi-line wakes
+                self.offers.append(f"skip:one_open:{src}")
+            else:
+                self.offers.append(f"skip:{decision.action}:{src}")

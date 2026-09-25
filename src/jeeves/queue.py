@@ -273,11 +273,10 @@ def top_unaccepted(home: Path) -> dict | None:
 
 
 def format_offer(nick: str, row: dict) -> str:
-    task = str(row.get("task") or "FR")
-    repo = str(row.get("repo") or "")
-    ident = str(row.get("id") or "")
-    url = str(row.get("url") or f"https://github.com/{repo}/issues/{ident.lstrip('#')}")
-    return f"{nick}: OFFER {task} {repo}{ident} {url}"
+    """K11: single-line OFFER only (ear-owned). See jeeves.offer."""
+    from .offer import format_offer as _fmt
+
+    return _fmt(nick, row)
 
 
 def _norm_ident(ident: str) -> str:
