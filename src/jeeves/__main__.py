@@ -71,6 +71,9 @@ def dry_run_plan(args: argparse.Namespace) -> dict:
 
     jh = Path(args.jeeves_home).expanduser() if args.jeeves_home else jeeves_home_from_env()
     dh = Path(args.digest_home).expanduser() if args.digest_home else digest_home_from_env()
+    from .versioning import check_drift, running_version, version_report_payload
+
+    ver = version_report_payload()
     return {
         "ok": True,
         "mode": args.mode,
@@ -84,6 +87,11 @@ def dry_run_plan(args: argparse.Namespace) -> dict:
         "never_touch": ["Ergo", "BobIrcd", "ircd.yaml"],
         "queue_path": str(dh / "queue.json"),
         "entry": "python -m jeeves",
+        "version": ver.get("version"),
+        "jeeves_version": ver.get("jeeves_version"),
+        "version_drift": ver.get("version_drift"),
+        "running": running_version().report_string,
+        "drift_ok": check_drift().ok,
     }
 
 
@@ -111,6 +119,15 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["BOB_DIGEST_HOME"] = str(dh)
     os.environ["JEEVES_HOME"] = str(jh)
     os.environ["AGENTIC_IRC_HOME"] = str(jh)
+
+    # K5: stamp running version for webhook drift (FR #6)
+    try:
+        from .versioning import write_version_stamp
+
+        write_version_stamp(dh)
+        print(f"INFO version stamp {dh / 'jeeves_version.json'}", flush=True)
+    except Exception as exc:
+        print(f"INFO version stamp skip {type(exc).__name__}", flush=True)
 
     if not args.no_singleton:
         try:
