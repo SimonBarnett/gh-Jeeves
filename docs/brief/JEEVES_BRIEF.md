@@ -59,7 +59,7 @@ Evidence for each is in sections 4, 11, 12 and 18. Each FR needs a failing test 
 | K7 | **The `BobIrcd` service shows Stopped while ergo.exe runs** outside it | section 4.3 | **Report only.** gh-Jeeves must not touch Ergo/BobIrcd; raise it for Simon in agentic_build. Jeeves health should detect the IRC server being down. |
 | K8 | **The receiver launcher `BobReport-ionos` is ad hoc** (a script in the Administrator profile, not in any repo) | section 4.3, section 18 | gh-Jeeves (or agentic_build) owns the receiver service and installer. |
 | K9 | **`config/bobiverse.json` has duplicate `reportUrl` keys** (with and without :7700) | section 4.2 | A single key (`https://irc.ntsa.uk/bob/v1/report`) plus `jeeves.config_lint` / FR #10 tests. |
-| K10 | **Docs contradict the rules:** 3 agentic_build README diagrams and the `bob-token-efficient-handoff` skill say "Jeeves offers the job" | section 4.4 | Fix the docs and skills; gh-Jeeves README is the source of truth with small diagrams. |
+| K10 | **Docs contradict the rules:** 3 agentic_build README diagrams and the `bob-token-efficient-handoff` skill say "Jeeves offers the job" | section 4.4 | Fix the docs and skills; gh-Jeeves README is the source of truth with small diagrams. **FR #11** + lint `tests/test_docs_k10_fr11.py`. |
 | K11 | **ASSIGN has no owner:** no code sends it, so it was hand/LLM-sent via bob-marchhare. Several ASSIGNs were fired while the worker was busy, and multi-line assignments split into separate wakes (blocks gate) | sections 11, 12, 18 | A deterministic single-line OFFER from the ear, one item per worker, gated on busy state. |
 | K12 | **Worker sessions look idle:** FROM payloads run as hidden `agent.exe -r <session> -p` processes, not in the visible seat | section 11 | Busy state on the webhook/TipForm from ACK/DONE; the worker pack echoes its task in the seat. |
 | K13 | **IRC reconnect storm:** irc_agent `PART :recv idle`, then the monitor relaunches every few seconds, then Ergo's "too many connections" throttle | section 11, section 5.9 | Reconnect in place with exponential backoff on the throttle ERROR (agentic_irc #210 area); Jeeves and the ears get the same. |
@@ -206,7 +206,7 @@ Seed skills (each is a seed FR with a test or lint that checks the skill exists 
 | CAST IRON 2 (ACK/DONE → accepted/busy, done/idle) | Not implemented. `accepted` stays empty (0 on ionos). |
 | CAST IRON 6 (supersede) | Not implemented. Merged or closed items stay queued. |
 | Worker nick | `gitclaim` expects `w-<short>-<pid>` (for example `w-mh-123`). Live watch-seat workers use **`{machine}-{pid}`** (for example `marchhare-34992`), so they are ignored by `bored_gate`. |
-| Docs | The agentic_build README diagrams 2–4 and the `bob-token-efficient-handoff` skill still say "Jeeves offers the top job". The agentic_irc README still says "no HTTP GET of the digest" (GET exists since #174). All must be corrected to the CAST IRON rules. |
+| Docs | K10 (FR #11): agentic_build README diagrams 2–4 and git-accept / chair skills must say **Jeeves assigns** (gh-Jeeves README is SoT). Legacy name `bob-token-efficient-handoff` → `bob-token-handoff`. The agentic_irc README still says "no HTTP GET of the digest" (GET exists since #174) — separate fix. |
 | Service | Runs as a scheduled task from a hotpatch checkout, not as a service from main (#330). |
 
 ---
@@ -493,7 +493,7 @@ Non-goals: LLM features, offering or assigning, Ergo config, TipForm UI, worker 
    - One-off: resync the live queue from GitHub (clearing the 28 stale rows).
 6. **Phase 5: cut-over and clean-up.**
    - Remove the chair code from agentic_irc, leaving a thin shim that errors "moved to gh-Jeeves".
-   - Update the skills (bob-jeeves-chair, bob-git-accept-claim, bob-token-efficient-handoff) and the agentic_build README diagrams 2–4 so they stop saying "Jeeves offers".
+   - Update the skills (bob-jeeves-chair, bob-git-accept, bob-token-handoff) and the agentic_build README diagrams 2–4 so they say **Jeeves assigns** (FR #11 / K10).
    - Fix the duplicate `reportUrl` key.
 7. **Phase 6: ops.** After Simon approves, agentic_build #327 enables registration and ops.
 
