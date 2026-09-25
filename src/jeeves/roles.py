@@ -25,6 +25,7 @@ class JeevesChair:
     """
     Drains chair-outbox to #bobiverse; silent ACK/DONE listener in shops.
     Never handles !bored / never offers.
+    Optional FR #25 resync scheduler (GitHub rebuild) injected by caller.
     """
 
     def __init__(
@@ -35,6 +36,7 @@ class JeevesChair:
         report_url: str,
         nick: str = "Jeeves",
         shops: list[str] | None = None,
+        resync_scheduler=None,
     ):
         self.home = Path(home)
         self.report_url = report_url.rstrip("/")
@@ -45,12 +47,21 @@ class JeevesChair:
         self._stop = threading.Event()
         self._t = threading.Thread(target=self._run, name="jeeves-chair", daemon=True)
         self.handled: list[str] = []
+        self.resync_scheduler = resync_scheduler
 
     def start(self) -> None:
+        if self.resync_scheduler is not None:
+            # rebuild task list on start (FR #25); scheduler owns periodic loop
+            self.resync_scheduler.start(run_immediately=True)
         self._t.start()
 
     def stop(self) -> None:
         self._stop.set()
+        if self.resync_scheduler is not None:
+            try:
+                self.resync_scheduler.stop()
+            except Exception:
+                pass
         self.client.close()
         self._t.join(timeout=2.0)
 
