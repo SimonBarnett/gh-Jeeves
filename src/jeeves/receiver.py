@@ -1,8 +1,9 @@
-"""Stub GIT + report + intake webhook receiver for G1 (loopback only)."""
+"""GIT + report + intake webhook receiver (G1 stub + FR #47 bobcallback drop-in)."""
 
 from __future__ import annotations
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .announce import process_git_webhook
+from .auth_secret import check_bob_secret, load_bob_secret
+from .digest import apply_report, public_digest_snapshot
 from .intake import (
     FakeGitHubFiler,
     IntakeConfig,
@@ -17,11 +20,18 @@ from .intake import (
     get_intake_status,
     process_intake,
 )
-from .queue import apply_queue_event, load_queue, save_queue
+from .queue import apply_queue_event
 
 
 class DigestState:
-    def __init__(self, home: Path, *, intake_cfg: IntakeConfig | None = None):
+    def __init__(
+        self,
+        home: Path,
+        *,
+        intake_cfg: IntakeConfig | None = None,
+        bob_secret: str | None = None,
+        require_secret: bool | None = None,
+    ):
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
@@ -31,6 +41,37 @@ class DigestState:
         self.intake_filer = FakeGitHubFiler()
         self.intake_rate = RateLimiter(self.intake_cfg.rate_per_min)
         self.intake_logs: list[str] = []
+        # FR #47: X-Bob-Secret for report/intake writes (never /bob/v1/git — fleet hooks
+        # carry no secret; see docs/vision.md Trust + JEEVES_BRIEF §4.1 / §8).
+        # G1 StubReceiver(bob_secret=None): ignore ambient ~/.grok secrets unless
+        # BOB_REQUIRE_SECRET / env secret / digest-home bob.secret is present.
+        env_secret = load_bob_secret(homes=[self.home])
+        if bob_secret is not None:
+            self.bob_secret = bob_secret
+        else:
+            self.bob_secret = env_secret
+        if require_secret is None:
+            env_req = (os.environ.get("BOB_REQUIRE_SECRET") or "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            env_explicit = bool(
+                (os.environ.get("BOB_CALLBACK_SECRET") or os.environ.get("BOB_SECRET") or "").strip()
+            )
+            home_secret_file = any(
+                (self.home / name).is_file() for name in ("bob.secret", ".bob-secret")
+            )
+            if bob_secret is not None:
+                # explicit constructor arg: empty → off; non-empty → on
+                self.require_secret = bool(bob_secret) or env_req
+            else:
+                # production file under digest home must arm auth (cutover doc)
+                self.require_secret = env_explicit or env_req or home_secret_file
+            if self.require_secret and not self.bob_secret:
+                self.bob_secret = env_secret
+        else:
+            self.require_secret = bool(require_secret)
 
     def chair_outbox_path(self) -> Path:
         return self.home / "chair-outbox.txt"
@@ -41,27 +82,13 @@ class DigestState:
             f.write(f"PRIVMSG #bobiverse :{line}\n")
 
     def snapshot(self) -> dict[str, Any]:
-        q = load_queue(self.home)
-        snap: dict[str, Any] = {
-            "queue": q,
-            "announces": list(self.announces),
-            "events": list(self.events),
-            "workers": q.get("workers") or {},
-        }
-        # K5 / FR #6: surface running version + drift (stamp file or live resolve)
-        stamp = self.home / "jeeves_version.json"
-        if stamp.is_file():
-            try:
-                snap.update(json.loads(stamp.read_text(encoding="utf-8")))
-            except (OSError, json.JSONDecodeError):
-                pass
-        else:
-            try:
-                from .versioning import version_report_payload
-
-                snap.update(version_report_payload())
-            except Exception:
-                pass
+        snap = public_digest_snapshot(self.home, queue_home=self.home)
+        snap["announces"] = list(self.announces)
+        # keep recent internal events without secrets
+        snap.setdefault("events", [])
+        if self.events:
+            # merge last internal ops into digest events tail (already in digest.json)
+            pass
         return snap
 
 
@@ -69,6 +96,15 @@ def make_handler(state: DigestState):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt: str, *args) -> None:  # noqa: A003
             return
+
+        def _hdrs(self) -> dict[str, str]:
+            return {k: v for k, v in self.headers.items()}
+
+        def _require_write_secret(self) -> bool:
+            """FR #47: report/intake POSTs need X-Bob-Secret when require_secret."""
+            if not state.require_secret:
+                return True
+            return check_bob_secret(self._hdrs(), state.bob_secret)
 
         def _read_raw(self) -> bytes:
             length = int(self.headers.get("Content-Length") or 0)
@@ -91,6 +127,7 @@ def make_handler(state: DigestState):
 
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            # GET digest is public (bobcallback contract) — no secret
             if path in ("/bob/v1/report", "/bob/v1/digest", "/digest"):
                 body = json.dumps(state.snapshot()).encode("utf-8")
                 self.send_response(200)
@@ -114,6 +151,14 @@ def make_handler(state: DigestState):
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            # Report/intake writes need X-Bob-Secret when configured.
+            # /bob/v1/git must NOT — fleet GitHub hooks carry no secret (vision Trust;
+            # BRIEF: "no HMAC (the fleet hooks carry no secret)").
+            if path in ("/bob/v1/report", "/bob/v1/intake", "/bob/v1/intake/"):
+                if not self._require_write_secret():
+                    self.send_response(401)
+                    self.end_headers()
+                    return
             if path == "/bob/v1/git":
                 event = self.headers.get("X-GitHub-Event") or ""
                 payload = self._read_json()
@@ -156,58 +201,29 @@ def make_handler(state: DigestState):
                 return
             if path == "/bob/v1/report":
                 payload = self._read_json()
+                if not isinstance(payload, dict) or payload == {}:
+                    # distinguish empty parse as 400
+                    raw = True
                 with state.lock:
-                    state.events.append({"report": payload})
-                    op = str(payload.get("op") or "")
-                    q = load_queue(state.home)
-                    nick = str(payload.get("nick") or "")
-                    if op == "queue_accept":
-                        row = payload.get("accepted_row")
-                        if isinstance(row, dict) and row.get("repo") and row.get("id"):
-                            rid = str(row.get("id"))
-                            rrepo = str(row.get("repo"))
-                            rtask = str(row.get("task") or "").upper()
-                            q["unaccepted"] = [
-                                r
-                                for r in (q.get("unaccepted") or [])
-                                if not (
-                                    str(r.get("repo")) == rrepo
-                                    and str(r.get("id")) == rid
-                                    and str(r.get("task") or "").upper() == rtask
-                                )
-                            ]
-                            q["accepted"] = [
-                                r
-                                for r in (q.get("accepted") or [])
-                                if not (
-                                    str(r.get("repo")) == rrepo
-                                    and str(r.get("id")) == rid
-                                    and str(r.get("task") or "").upper() == rtask
-                                )
-                            ]
-                            q.setdefault("accepted", []).append(row)
-                        if nick:
-                            q.setdefault("workers", {})[nick] = {
-                                "state": str(payload.get("state") or "busy"),
-                                "job": payload.get("job"),
-                                "ts": payload.get("ts"),
-                            }
-                        save_queue(state.home, q)
-                    elif op == "worker_state":
-                        if nick:
-                            q.setdefault("workers", {})[nick] = {
-                                "state": str(payload.get("state") or "idle"),
-                                "job": payload.get("job"),
-                                "ts": payload.get("ts"),
-                            }
-                            save_queue(state.home, q)
-                    elif op == "queue_done":
-                        if nick:
-                            q.setdefault("workers", {})[nick] = {
-                                "state": "idle",
-                                "ts": payload.get("ts"),
-                            }
-                            save_queue(state.home, q)
+                    out = apply_report(state.home, payload if isinstance(payload, dict) else {})
+                    state.events.append(
+                        {"report_op": str((payload or {}).get("op") or ""), "ok": out.ok}
+                    )
+                    if not out.ok:
+                        self.send_response(400)
+                        self.end_headers()
+                        return
+                    if out.body is not None:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(out.body)))
+                        self.end_headers()
+                        self.wfile.write(out.body)
+                        return
+                    if not out.changed:
+                        self.send_response(200)
+                        self.end_headers()
+                        return
                 self.send_response(204)
                 self.end_headers()
                 return
@@ -225,8 +241,15 @@ class StubReceiver:
         port: int = 0,
         *,
         intake_cfg: IntakeConfig | None = None,
+        bob_secret: str | None = None,
+        require_secret: bool | None = None,
     ):
-        self.state = DigestState(home, intake_cfg=intake_cfg)
+        self.state = DigestState(
+            home,
+            intake_cfg=intake_cfg,
+            bob_secret=bob_secret,
+            require_secret=require_secret,
+        )
         self.host = host
         self.port = port
         self._httpd: HTTPServer | None = None

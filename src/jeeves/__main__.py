@@ -192,7 +192,17 @@ def main(argv: list[str] | None = None) -> int:
     report_base = args.report_url.rstrip("/")
 
     if args.mode in ("receiver", "all"):
-        receiver = ProdReceiver(dh, host=args.receiver_bind, port=args.receiver_port)
+        # FR #47: arm X-Bob-Secret from digest-home bob.secret / env (never log value)
+        from .auth_secret import load_bob_secret
+
+        _sec = load_bob_secret(homes=[dh])
+        receiver = ProdReceiver(
+            dh,
+            host=args.receiver_bind,
+            port=args.receiver_port,
+            bob_secret=_sec if _sec else None,
+            require_secret=True if _sec else None,
+        )
         port = receiver.start(background=True)
         report_base = f"http://{args.receiver_bind}:{port}"
         print(f"INFO receiver listen {args.receiver_bind}:{port} digest_home={dh}", flush=True)

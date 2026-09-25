@@ -164,10 +164,20 @@ class JeevesChair:
 
     def _post_report(self, payload: dict) -> None:
         data = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        # FR #47: attach X-Bob-Secret when configured (never log value)
+        try:
+            from .auth_secret import load_bob_secret
+
+            sec = load_bob_secret(homes=[self.home])
+            if sec:
+                headers["X-Bob-Secret"] = sec
+        except Exception:
+            pass
         req = urllib.request.Request(
             f"{self.report_url}/bob/v1/report",
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -291,28 +301,30 @@ class JeevesChair:
             counts = queue_counts(self.home)
             if st == "accepted":
                 job = f"{ack.repo} {ack.task} #{ack.number}"
-                self._post_report(
-                    {
-                        "op": "queue_accept",
-                        "nick": src,
-                        "state": "busy",
-                        "job": job,
-                        "repo": ack.repo,
-                        "task": ack.task,
-                        "id": f"#{ack.number}",
-                        "accepted_row": row,
-                        "queue": counts,
-                    }
-                )
-                # also legacy worker_state for older digest consumers
-                self._post_report(
-                    {
-                        "op": "worker_state",
-                        "nick": src,
-                        "state": "busy",
-                        "job": job,
-                    }
-                )
+                try:
+                    self._post_report(
+                        {
+                            "op": "queue_accept",
+                            "nick": src,
+                            "state": "busy",
+                            "job": job,
+                            "repo": ack.repo,
+                            "task": ack.task,
+                            "id": f"#{ack.number}",
+                            "accepted_row": row,
+                            "queue": counts,
+                        }
+                    )
+                    self._post_report(
+                        {
+                            "op": "worker_state",
+                            "nick": src,
+                            "state": "busy",
+                            "job": job,
+                        }
+                    )
+                except Exception:
+                    self.handled.append(f"ack_report_err:{src}")
                 self.handled.append(f"ack:{src}:{ack.repo}#{ack.number}")
             else:
                 self.handled.append(f"ack_no_match:{src}:{ack.repo}#{ack.number}")
