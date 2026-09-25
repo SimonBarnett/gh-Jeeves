@@ -27,6 +27,8 @@ _SWEEP = re.compile(r"^!+\s*sweep(?:\s+(#?\S+))?\s*$", re.I)
 _IGNORE = re.compile(r"^!+\s*ignore(?:\s+\S+)?\s*$", re.I)
 _UNIGNORE = re.compile(r"^!+\s*unignore(?:\s+\S+)?\s*$", re.I)
 _IGNORED = re.compile(r"^!+\s*ignored\s*$", re.I)
+_STATUS = re.compile(r"^!+\s*status\s*$", re.I)
+_RESYNC = re.compile(r"^!+\s*resync\s*$", re.I)
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,12 @@ def is_unignore(body: str) -> bool:
 
 def is_ignored_list(body: str) -> bool:
     return bool(_IGNORED.match((body or "").strip()))
+def is_status(body: str) -> bool:
+    return bool(_STATUS.match((body or "").strip()))
+
+
+def is_resync(body: str) -> bool:
+    return bool(_RESYNC.match((body or "").strip()))
 
 
 def parse_list_filters(body: str) -> tuple[str | None, str | None, bool]:
