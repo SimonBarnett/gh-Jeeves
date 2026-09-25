@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .channel_join import AutoJoinController, normalize_channel
 from .local_ircd import IrcClient
+from .mode_grants import ModeGrantController
 from .nicks import bored_gate, canonical_worker_nick, worker_shop_channel
 from .offer import EarOfferState, contains_assign, is_single_line
 from .queue import (
@@ -32,10 +33,12 @@ from .wire import (
     is_bored,
     is_help,
     is_list,
+    is_sweep,
     parse_ack,
     parse_done,
     parse_list_filters,
     parse_nack,
+    parse_sweep,
 )  # noqa: F401
 
 
@@ -75,6 +78,11 @@ class JeevesChair:
         self.pm_egress: list[tuple[str, str]] = []  # (nick, text) help/list
         self.help_rate = HelpRateLimit()
         self.resync_scheduler = resync_scheduler
+        # FR #52: mode grants (+h bob / +o simon) — account-trusted, no channel text
+        self.mode_grants: ModeGrantController | None = None
+        if hasattr(self.client, "send_raw"):
+            self.mode_grants = ModeGrantController(self.client, jeeves_nick=nick, rate_s=0.05)
+
         self.auto_join_ctrl: AutoJoinController | None = None
         if auto_join and hasattr(self.client, "send_raw"):
             seed = list(dict.fromkeys(["#bobiverse", *[normalize_channel(s) for s in self.shops]]))
@@ -85,7 +93,12 @@ class JeevesChair:
                 seed=seed,
                 list_interval_s=list_interval_s,
             )
-            # wire raw LIST/KICK into controller
+        elif not hasattr(self.client, "send_raw"):
+            # legacy static join only
+            self.client.join("#bobiverse", *self.shops)
+
+        # Wire raw JOIN/ACCOUNT/MODE/LIST/KICK into FR52 + FR55 controllers
+        if self.mode_grants is not None or self.auto_join_ctrl is not None:
             prev = getattr(self.client, "on_raw", None)
 
             def _on_raw(line: str) -> None:
@@ -94,13 +107,16 @@ class JeevesChair:
                         prev(line)
                     except Exception:
                         pass
-                assert self.auto_join_ctrl is not None
-                self.auto_join_ctrl.handle_raw(line)
+                if self.mode_grants is not None:
+                    self.mode_grants.handle_raw(line)
+                if self.auto_join_ctrl is not None:
+                    self.auto_join_ctrl.handle_raw(line)
 
             self.client.on_raw = _on_raw  # type: ignore[method-assign]
-        else:
-            # legacy static join only
-            self.client.join("#bobiverse", *self.shops)
+        if self.auto_join_ctrl is None and hasattr(self.client, "send_raw"):
+            # auto_join disabled but client can send_raw — still static join
+            if not auto_join:
+                self.client.join("#bobiverse", *self.shops)
         # Policy pins — tests assert these stay false.
         assert chair_handles_bored() is False
         assert chair_may_offer() is False
@@ -218,6 +234,32 @@ class JeevesChair:
             self._pm(src, line)
         self.handled.append(f"help:{src}:{arg or '*'}:{len(result.lines)}")
 
+    def _handle_sweep(self, src: str, target: str, text: str) -> None:
+        """FR #52: !sweep [channel] — simon + account simon only; no channel text."""
+        ch = parse_sweep(text)
+        if ch is None:
+            return
+        if (src or "").strip().lower() != "simon":
+            self.handled.append(f"sweep_denied_nick:{src}")
+            return
+        if self.mode_grants is None:
+            self.handled.append("sweep_no_controller")
+            return
+        acct = (self.mode_grants.state.accounts.get("simon") or "").strip().lower()
+        if acct != "simon":
+            self.handled.append("sweep_denied_unauth")
+            self.mode_grants.state.events.append(f"sweep_denied_unauth:{src}")
+            return
+        if not ch:
+            ch = target if target.startswith("#") else "#bobiverse"
+        try:
+            self.client.send_raw(f"NAMES {ch}")
+        except Exception:
+            pass
+        known = list(self.mode_grants.state.accounts.keys())
+        granted = self.mode_grants.sweep_channel(ch, known)
+        self.handled.append(f"sweep:{ch}:{len(granted)}")
+
     def _handle_shop(self, src: str, target: str, text: str) -> None:
         # !help from channel or PM → reply by PM only (no channel flood)
         if is_help(text) or parse_help(text)[0]:
@@ -225,6 +267,9 @@ class JeevesChair:
             return
         if is_list(text):
             self._handle_list(src, text)
+            return
+        if is_sweep(text):
+            self._handle_sweep(src, target, text)
             return
         if not target.startswith("#"):
             if is_list(text):

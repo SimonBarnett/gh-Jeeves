@@ -37,6 +37,8 @@ flowchart LR
 
 ## CAST IRON rules
 
+**Modes (FR #52):** authenticated `bob-*` get `+h` (`+o` in own shop); authenticated `simon` from a fleet host gets `+o`. Trust is services account (SASL), never nick alone. No channel text.
+
 **Channel join (FR #55):** on connect and reconnect Jeeves sends LIST and JOINs every channel returned (skips 0/+ local and config denylist). Periodic re-LIST (default 60s) joins newly created shops. KICK rejoins with backoff; ban/invite-only logs once and stops. Static shops is optional seed only.
 
 1. Announce only on `#bobiverse`; queue on digest webhook.  

@@ -111,6 +111,8 @@ class TlsIrcClient:
         self.sock: socket.socket | None = None
         self.buf = ""
         self.inbox: list[tuple[str, str, str]] = []
+        self.raw_inbox: list[str] = []
+        self.on_raw: Callable[[str], None] | None = None
         self._lock = threading.Lock()
         self.reconnect_count = 0
         self.last_throttle = False
@@ -132,13 +134,13 @@ class TlsIrcClient:
             )
         self.sock.settimeout(0.5)
         self.buf = ""
-        # CAP/SASL optional
+        # CAP/SASL + FR #52 identity (account-notify / extended-join)
         if self.sasl_user and self.sasl_password:
             self._send("CAP LS 302")
             self._send("NICK " + self.nick)
             self._send(f"USER {self.nick} 0 * :{self.nick}")
             self._drain_until(lambda: True, timeout=2.0)
-            self._send("CAP REQ :sasl")
+            self._send("CAP REQ :sasl account-notify extended-join")
             self._send("AUTHENTICATE PLAIN")
             # wait AUTHENTICATE +
             self._drain_until(lambda: True, timeout=2.0)
@@ -152,6 +154,11 @@ class TlsIrcClient:
                 self._send("PASS " + self.password)
             self._send("NICK " + self.nick)
             self._send(f"USER {self.nick} 0 * :{self.nick}")
+            # still request identity CAPs when present (Ergo may grant without SASL)
+            self._send("CAP LS 302")
+            self._drain_until(lambda: True, timeout=1.0)
+            self._send("CAP REQ :account-notify extended-join")
+            self._send("CAP END")
         self._drain_until(lambda: True, timeout=3.0)
 
     def reconnect(self, *, attempt: int | None = None) -> float:
@@ -177,6 +184,10 @@ class TlsIrcClient:
         with self._lock:
             self.sock.sendall(data)
 
+    def send_raw(self, line: str) -> None:
+        """FR #52: MODE and other non-PRIVMSG lines for ModeGrantController."""
+        self._send(line)
+
     def join(self, *channels: str) -> None:
         for ch in channels:
             self._send(f"JOIN {ch}")
@@ -189,6 +200,12 @@ class TlsIrcClient:
     def _parse(self, line: str) -> None:
         if not line:
             return
+        self.raw_inbox.append(line)
+        if self.on_raw:
+            try:
+                self.on_raw(line)
+            except Exception:
+                pass
         if is_throttle_error(line):
             self.last_throttle = True
         up = line.upper()
