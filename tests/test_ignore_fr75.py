@@ -359,3 +359,83 @@ def test_ignored_json_persists_across_reload(tmp_path: Path):
     # fresh load from disk
     assert is_ignored(home, "owner/one")
     assert is_ignored(home, "Someone/Two")
+
+def test_bare_unignore_usage(tmp_path: Path):
+    home = tmp_path / "d"
+    assert handle_unignore(home, "") == [
+        "unignore: bad repo (use name or owner/name)"
+    ]
+
+
+def test_unignore_does_not_restore_purged_rows(tmp_path: Path):
+    """Unignore is new events only — purged FR must stay gone."""
+    home = tmp_path / "d"
+    apply_queue_event(
+        home, Claim(repo="SimonBarnett/noise", task="FR", id="#9", line="old")
+    )
+    handle_ignore_add(home, "noise")
+    assert all(r.get("repo") != "SimonBarnett/noise" for r in load_queue(home)["unaccepted"])
+    handle_unignore(home, "noise")
+    assert all(r.get("repo") != "SimonBarnett/noise" for r in load_queue(home)["unaccepted"])
+    # new event still allowed
+    assert apply_queue_event(
+        home, Claim(repo="SimonBarnett/noise", task="FR", id="#10", line="new")
+    ).startswith("enqueued")
+
+
+def test_already_ignoring_still_purges(tmp_path: Path):
+    home = tmp_path / "d"
+    add_ignore(home, "noise")
+    apply_queue_event(
+        home, Claim(repo="SimonBarnett/noise", task="FR", id="#1", line="sneak")
+    )
+    # row slipped in before second ignore path (e.g. race) — re-ignore purges
+    lines = handle_ignore_add(home, "noise")
+    assert any("already ignoring" in ln for ln in lines)
+    assert any("purged" in ln for ln in lines)
+    assert all(r.get("repo") != "SimonBarnett/noise" for r in load_queue(home)["unaccepted"])
+
+
+def test_corrupt_ignored_json_recovers_empty(tmp_path: Path):
+    home = tmp_path / "d"
+    home.mkdir(parents=True)
+    (home / "ignored.json").write_text("{not json", encoding="utf-8")
+    assert load_ignored(home)["repos"] == []
+    assert not is_ignored(home, "a/b")
+
+
+def test_format_ignored_empty_and_list(tmp_path: Path):
+    from jeeves.ignore import format_ignored_lines
+    home = tmp_path / "d"
+    assert format_ignored_lines(home) == ["ignored: (none)"]
+    add_ignore(home, "Owner/One")
+    lines = format_ignored_lines(home)
+    assert lines[0].startswith("ignored (")
+    assert any("Owner/One" in ln or "owner/one" in ln.lower() for ln in lines)
+
+
+def test_worker_denied_unignore_on_chair(tmp_path: Path):
+    import time
+    home = tmp_path / "d"
+    home.mkdir(parents=True)
+    add_ignore(home, "Toy")
+    ircd = LocalIrcd()
+    port = ircd.start()
+    chair = JeevesChair(
+        "127.0.0.1",
+        port,
+        home,
+        report_url="http://127.0.0.1/9",
+        shops=["#bobiverse"],
+        auto_join=False,
+    )
+    chair.start()
+    time.sleep(0.05)
+    try:
+        chair._handle_shop("flamingo-99", "#bobiverse", "!unignore Toy")
+        assert any("unignore_denied" in h or "ignore_denied" in h for h in chair.handled), chair.handled
+        assert is_ignored(home, "x/Toy")
+    finally:
+        chair.stop()
+        ircd.stop()
+
