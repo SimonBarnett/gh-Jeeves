@@ -66,10 +66,10 @@ def test_g1_guard_blocks_non_loopback():
 
 def test_g1_token_less_e2e_chain(g1_home: Path):
     """
-    Full chain:
+    Full chain (FR #106):
     1 GitHub POST → announce + queue
     2 worker !bored
-    3 ear OFFER
+    3 Jeeves assign line
     4 worker ACK → accepted + busy
     5 worker DONE → done + idle
     """
@@ -81,6 +81,7 @@ def test_g1_token_less_e2e_chain(g1_home: Path):
         base = f"http://127.0.0.1:{rport}"
 
         jeeves = JeevesChair("127.0.0.1", port, g1_home, base, shops=["#flamingo"])
+        jeeves.live_seats_override = {"flamingo-9001"}
         ear = BobEar("127.0.0.1", port, g1_home, machine="flamingo")
         worker = IrcClient("127.0.0.1", port, "flamingo-9001")
         worker.join("#flamingo")
@@ -123,21 +124,18 @@ def test_g1_token_less_e2e_chain(g1_home: Path):
             assert unacc[0]["id"] == "#1"
             assert unacc[0]["repo"] == "SimonBarnett/gh-Jeeves"
 
-            # --- steps 2–3: !bored → OFFER ---
+            # --- steps 2–3: !bored → Jeeves assign ---
             worker.privmsg("#flamingo", "!bored")
-            offer = worker.wait_privmsg(
-                predicate=lambda m: m[0].startswith("bob-") and "OFFER" in m[2],
+            assign = worker.wait_privmsg(
+                predicate=lambda m: m[0].lower() == "jeeves"
+                and m[2].startswith("flamingo-9001:")
+                and "OFFER" not in m[2],
                 timeout=5.0,
             )
-            assert offer is not None
-            assert "OFFER FR SimonBarnett/gh-Jeeves#1" in offer[2]
-            assert offer[2].startswith("flamingo-9001:")
-
-            # Jeeves must not have answered !bored with an offer
-            assert not any("OFFER" in h for h in jeeves.handled)
-            assert "ignored_bored" in jeeves.handled or not any(
-                h.startswith("offer") for h in jeeves.handled
-            )
+            assert assign is not None
+            assert "FR SimonBarnett/gh-Jeeves#1" in assign[2]
+            assert any(h.startswith("assign:flamingo-9001:") for h in jeeves.handled)
+            assert any(str(x).startswith("retired_bored:") for x in ear.offers)
 
             # --- step 4: ACK ---
             worker.privmsg("#flamingo", "ACK FR SimonBarnett/gh-Jeeves#1")

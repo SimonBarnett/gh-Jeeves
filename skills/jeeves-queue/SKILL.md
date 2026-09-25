@@ -16,11 +16,11 @@ is dry-run first.
 
 **Ignore list (FR #75):** `!ignore {repo}` / `!unignore {repo}` / `!ignored`.
 Persists as `ignored.json` next to `queue.json`. Ignored repos are dropped from
-announce, queue, `!list`, and ear offers. Purge on ignore; unignore is new
+announce, queue, `!list`, and Jeeves assign-on-`!bored`. Purge on ignore; unignore is new
 events only. Dry-run before hand-editing `ignored.json`.
 
 **Focus (FR #68):** `!focus [n|high|medium|low] {repo}` / `!unfocus {repo}|all`
-(simon account). `focus.json` beside queue. One sort for `!list` and ear
-`top_unaccepted` (!bored). Ignored still wins over focus.
+(simon account). `focus.json` beside queue. One sort for `!list` and Jeeves
+assign-on-`!bored` (FR #106). Ignored still wins over focus.
 
 Agentic control is an overlay: the token-less path must never depend on this skill.

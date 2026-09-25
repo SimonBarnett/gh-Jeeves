@@ -25,7 +25,7 @@ _HELP_RE = re.compile(r"^!+\s*help(?:\s+(\S+))?\s*$", re.I)
 
 # Shop grammar pointer (one line; not a Jeeves PM command)
 SHOP_POINTER = (
-    "note: ACK/DONE/NACK in #{machine} and ear !bored/OFFER are shop wire, not Jeeves PM — see README"
+    "note: !bored→Jeeves assign, ACK/DONE/NACK in #{machine} are shop wire, not Jeeves PM — see README"
 )
 
 
