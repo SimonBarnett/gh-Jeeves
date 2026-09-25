@@ -9,7 +9,7 @@ import urllib.request
 from pathlib import Path
 
 from .local_ircd import IrcClient
-from .nicks import canonical_worker_nick, worker_shop_channel
+from .nicks import bored_gate, canonical_worker_nick, worker_shop_channel
 from .queue import (
     accept_job,
     complete_job,
@@ -154,6 +154,10 @@ class JeevesChair:
             return
         ack = parse_ack(text)
         if ack:
+            # K2: only real worker nicks may ACK in their own shop
+            if bored_gate(src, target) != "ok":
+                self.handled.append(f"ignored_ack_bad_nick:{src}")
+                return
             st, row = accept_job(self.home, src, target, ack.task, ack.repo, ack.number)
             if st == "accepted":
                 self._post_report(
@@ -168,6 +172,9 @@ class JeevesChair:
             return
         done = parse_done(text)
         if done:
+            if bored_gate(src, target) != "ok":
+                self.handled.append(f"ignored_done_bad_nick:{src}")
+                return
             st, row = complete_job(
                 self.home, src, done.task, done.repo, done.number, done.result, done.url
             )
@@ -230,6 +237,10 @@ class BobEar:
             if target.lower() != self.shop:
                 continue
             if not is_bored(text):
+                continue
+            # K2: accept {machine}-{pid} (and legacy w-*); reject bob-/Jeeves
+            gate = bored_gate(src, target)
+            if gate != "ok":
                 continue
             canon = canonical_worker_nick(src)
             if not canon:
