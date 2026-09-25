@@ -23,8 +23,8 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
         "mode",
         nargs="?",
         default="all",
-        choices=("chair", "receiver", "all", "dry-run"),
-        help="Process role (default all)",
+        choices=("chair", "receiver", "all", "dry-run", "health"),
+        help="Process role (default all); health = report-only IRC/service probe (FR #8)",
     )
     p.add_argument("--nick", default=os.environ.get("AGENTIC_IRC_CHAIR_NICK") or "Jeeves")
     p.add_argument("--host", default=os.environ.get("AGENTIC_IRC_HOST") or "127.0.0.1")
@@ -102,6 +102,20 @@ def main(argv: list[str] | None = None) -> int:
 
         print(json.dumps(dry_run_plan(args), indent=2))
         return 0
+    if args.mode == "health":
+        from . import health as health_mod
+
+        h_argv: list[str] = []
+        if args.host:
+            h_argv += ["--host", args.host]
+        if args.port:
+            h_argv += ["--port", str(args.port)]
+        if args.tls:
+            h_argv.append("--tls")
+        else:
+            h_argv.append("--no-tls")
+        h_argv.append("--json")
+        return health_mod.main(h_argv)
 
     from .prod_receiver import (
         ProdReceiver,
