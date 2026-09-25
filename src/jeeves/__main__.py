@@ -16,6 +16,8 @@ import threading
 import time
 from pathlib import Path
 
+from .env_secrets import hydrate_secrets_from_files
+
 
 def _parse(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="python -m jeeves", description="BobJeeves chair + GIT receiver")
@@ -75,7 +77,8 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--receiver-port",
         type=int,
-        default=int(os.environ.get("BOB_REPORT_PORT") or "8765"),
+        # FR #48: ionos IIS proxies to 19781; helpers/skill default combined topology
+        default=int(os.environ.get("BOB_REPORT_PORT") or "19781"),
     )
     p.add_argument(
         "--shops",
@@ -130,6 +133,7 @@ def dry_run_plan(args: argparse.Namespace) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    hydrate_secrets_from_files()
     args = _parse(argv)
     if args.mode == "dry-run":
         import json

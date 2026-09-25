@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -113,3 +114,28 @@ def test_start_helper_production_cmdline():
 def test_skill_documents_combined_topology():
     skill = (ROOT / "skills" / "jeeves-install-service" / "SKILL.md").read_text(encoding="utf-8")
     assert "19781" in skill or "combined" in skill.lower() or "bobjeeves" in skill.lower()
+
+
+def test_hydrate_sasl_password_file(tmp_path: Path, monkeypatch):
+    """nssm sets *_PASSWORD_FILE; jeeves must load into AGENTIC_IRC_SASL_PASSWORD."""
+    from jeeves.env_secrets import hydrate_secrets_from_files
+
+    secret = tmp_path / "sasl.pass"
+    secret.write_text("s3cret-line\n", encoding="utf-8")
+    monkeypatch.delenv("AGENTIC_IRC_SASL_PASSWORD", raising=False)
+    monkeypatch.setenv("AGENTIC_IRC_SASL_PASSWORD_FILE", str(secret))
+    hydrate_secrets_from_files()
+    assert os.environ.get("AGENTIC_IRC_SASL_PASSWORD") == "s3cret-line"
+
+
+def test_receiver_default_is_19781():
+    """FR #48: bare `python -m jeeves` matches IIS/helper default (not 8765)."""
+    from jeeves.__main__ import _parse
+
+    old = os.environ.pop("BOB_REPORT_PORT", None)
+    try:
+        args = _parse(["all"])
+        assert args.receiver_port == 19781
+    finally:
+        if old is not None:
+            os.environ["BOB_REPORT_PORT"] = old

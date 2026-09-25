@@ -28,12 +28,13 @@ A release is not shippable unless G1 is green and G2 is recorded.
 9. Ergo ops: `bob-{machine}` op in `#{machine}`; `Jeeves` op in `#bobiverse`; simon ops only via fleet client cert (Ergo config owned elsewhere).
 10. Jeeves runs as its own Windows service.
 11. Worker busy/idle observable from ACK/DONE; wakes serialised; never mistaken for idle while a hidden run works.
+12. Auto-join (FR #55): on connect/reconnect Jeeves LISTs the server and JOINs every channel (denylist skips); periodic re-LIST joins new shops; KICK backoff; shops config is seed only.
 
 ## Scope (owns)
 
 1. Announce chair (TLS IRC client, reconnect backoff, singleton nick, 417-safe split).
 2. Queue engine with supersede reducer; `queue.json` crash mirror; webhook source of truth.
-3. Shop listener for ACK/DONE/NACK/GIVEUP; silent; never !bored/offers.
+3. Shop listener for ACK/DONE/NACK/GIVEUP; silent; never !bored/offers; LIST auto-join every channel (FR #55).
 4. `!list` PM replies (in-channel or PM; rate-limited; page + explicit more-hint; FLOOD_S paced).
 5. Webhook writer for accepted/done/busy/idle.
 6. GitHub receiver `/bob/v1/git` including secret-field filter fix.
