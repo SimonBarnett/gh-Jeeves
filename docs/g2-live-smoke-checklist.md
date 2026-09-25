@@ -34,6 +34,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobJeeves.ps1 
 - [ ] `GET http://127.0.0.1:<port>/bob/v1/report` shows queue + workers
 - [ ] `POST /bob/v1/git` still enqueues; 15‑minute resync does not drop concurrent webhooks
 
+## TLS IRC (FR #46)
+
+- [ ] BobJeeves uses **native** `python -m jeeves --tls` (`jeeves.tls_irc.TlsIrcClient`) — **not** `agentic_irc` `irc_agent --chair`
+- [ ] TLS to Ergo (`irc.ntsa.uk:6697` or configured host); optional CA / pin via env
+- [ ] Reconnect after disconnect uses exponential backoff on throttle ERROR (K13)
+- [ ] Never edit Ergo / `ircd.yaml` during upgrade
+
 ## Queue continuity
 
 - [ ] Pre-cutover `queue.json` unaccepted/accepted counts preserved after start

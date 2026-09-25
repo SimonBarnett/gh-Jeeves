@@ -54,12 +54,14 @@ class JeevesChair:
         nick: str = "Jeeves",
         shops: list[str] | None = None,
         resync_scheduler=None,
+        client=None,
     ):
         self.home = Path(home)
         self.report_url = report_url.rstrip("/")
         self.nick = nick
         self.shops = shops or ["#flamingo"]
-        self.client = IrcClient(host, port, nick)
+        # FR #46: inject TlsIrcClient for Ergo; default plain G1 IrcClient
+        self.client = client if client is not None else IrcClient(host, port, nick)
         self.client.join("#bobiverse", *self.shops)
         self._stop = threading.Event()
         self._t = threading.Thread(target=self._run, name="jeeves-chair", daemon=True)
