@@ -6,9 +6,12 @@ import select
 import socket
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Callable
+
+# issue #74: bound raw line retention
+RAW_INBOX_MAX = 500
 
 
 @dataclass
@@ -301,7 +304,7 @@ class IrcClient:
         self.sock.settimeout(0.5)
         self.buf = ""
         self.inbox: list[tuple[str, str, str]] = []  # src, target, text
-        self.raw_inbox: list[str] = []  # all lines (FR #55 LIST/KICK)
+        self.raw_inbox: deque[str] = deque(maxlen=RAW_INBOX_MAX)  # FR #55 + #74 bound
         self.on_raw: Callable[[str], None] | None = None
         self._send(f"NICK {nick}")
         self._send(f"USER {nick} 0 * :{nick}")

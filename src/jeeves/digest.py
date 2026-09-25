@@ -106,13 +106,28 @@ def load_digest(home: Path) -> dict[str, Any]:
     return ensure_seats(doc)
 
 
-def save_digest(home: Path, doc: dict[str, Any]) -> None:
+def save_digest(home: Path, doc: dict[str, Any], *, retries: int = 5, backoff_s: float = 0.05) -> None:
+    """Atomic write with short retry on WinError 5 (issue #74)."""
     home = Path(home)
     home.mkdir(parents=True, exist_ok=True)
     path = digest_path(home)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(doc, indent=2, sort_keys=False) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    payload = json.dumps(doc, indent=2, sort_keys=False) + "\n"
+    tmp.write_text(payload, encoding="utf-8")
+    last_err: OSError | None = None
+    for attempt in range(max(1, int(retries))):
+        try:
+            tmp.replace(path)
+            return
+        except OSError as e:
+            last_err = e
+            # WinError 5 / sharing violation — another reader holds digest.json
+            if attempt + 1 < retries:
+                time.sleep(float(backoff_s) * (attempt + 1))
+                continue
+            raise
+    if last_err:
+        raise last_err
 
 
 def ensure_seats(doc: dict[str, Any]) -> dict[str, Any]:

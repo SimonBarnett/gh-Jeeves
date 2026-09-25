@@ -24,6 +24,8 @@ _BORED = re.compile(r"^!+\s*bored\b", re.I)
 _LIST = re.compile(r"^!+\s*list(?:\s+.*)?\s*$", re.I)
 _HELP = re.compile(r"^!+\s*help(?:\s+\S+)?\s*$", re.I)
 _SWEEP = re.compile(r"^!+\s*sweep(?:\s+(#?\S+))?\s*$", re.I)
+_STATUS = re.compile(r"^!+\s*status\s*$", re.I)
+_RESYNC = re.compile(r"^!+\s*resync\s*$", re.I)
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,14 @@ def parse_sweep(body: str) -> str | None:
 
 def is_sweep(body: str) -> bool:
     return parse_sweep(body) is not None
+
+
+def is_status(body: str) -> bool:
+    return bool(_STATUS.match((body or "").strip()))
+
+
+def is_resync(body: str) -> bool:
+    return bool(_RESYNC.match((body or "").strip()))
 
 
 def parse_list_filters(body: str) -> tuple[str | None, str | None, bool]:
