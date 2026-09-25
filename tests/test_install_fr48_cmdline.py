@@ -183,11 +183,21 @@ def test_install_dryrun_receiver_secret_and_password_and_no_resync(tmp_path: Pat
     assert "JEEVES_RESYNC_DISABLE" in text
 
 
-def test_g1_tls_fixture_exists():
-    """FR #72: pre-generated certs so Windows without openssl still runs G1 TLS."""
+def test_g1_tls_cert_generation_without_checked_in_keys(tmp_path: Path):
+    """FR #72 / MRB #98: generate certs without committing private keys."""
+    from jeeves.tls_irc import make_self_signed_cert
+
+    try:
+        cert, key = make_self_signed_cert(tmp_path / "certs")
+    except RuntimeError as exc:
+        import pytest
+        pytest.skip(str(exc))
+    assert cert.is_file() and key.is_file()
+    assert b"PRIVATE KEY" in key.read_bytes() or b"BEGIN" in key.read_bytes()
+    # never ship keys in fixtures
     d = ROOT / "tests" / "fixtures" / "g1_tls"
-    assert (d / "g1.pem").is_file()
-    assert (d / "g1.key").is_file()
+    assert not (d / "g1.key").is_file()
+    assert not (d / "g1.pem").is_file()
 
 
 def test_receiver_default_is_19781():
