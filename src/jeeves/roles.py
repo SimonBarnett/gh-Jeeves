@@ -18,13 +18,19 @@ from .queue import (
     top_unaccepted,
     worker_state,
 )
+from .cast_iron import (
+    chair_handles_bored,
+    chair_may_offer,
+    is_forbidden_shop_egress,
+    shop_egress_allowed_for_chair,
+)
 from .wire import is_bored, is_list, parse_ack, parse_done
 
 
 class JeevesChair:
     """
     Drains chair-outbox to #bobiverse; silent ACK/DONE listener in shops.
-    Never handles !bored / never offers.
+    Never handles !bored / never offers (K1 CAST IRON).
     Optional FR #25 resync scheduler (GitHub rebuild) injected by caller.
     """
 
@@ -47,7 +53,19 @@ class JeevesChair:
         self._stop = threading.Event()
         self._t = threading.Thread(target=self._run, name="jeeves-chair", daemon=True)
         self.handled: list[str] = []
+        self.shop_egress: list[tuple[str, str]] = []  # (channel, text) if any slip through
         self.resync_scheduler = resync_scheduler
+        # Policy pins — tests assert these stay false.
+        assert chair_handles_bored() is False
+        assert chair_may_offer() is False
+
+    def _shop_privmsg(self, channel: str, text: str) -> None:
+        """Chair must remain silent in shops (K1). Block claim/offer egress."""
+        if not shop_egress_allowed_for_chair(text) or is_forbidden_shop_egress(text):
+            self.handled.append(f"blocked_shop_egress:{channel}:{text[:80]}")
+            return
+        self.shop_egress.append((channel, text))
+        self.client.privmsg(channel, text)
 
     def start(self) -> None:
         if self.resync_scheduler is not None:
@@ -63,7 +81,11 @@ class JeevesChair:
             except Exception:
                 pass
         self.client.close()
-        self._t.join(timeout=2.0)
+        if self._t.is_alive() or self._t.ident is not None:
+            try:
+                self._t.join(timeout=2.0)
+            except RuntimeError:
+                pass
 
     def _post_report(self, payload: dict) -> None:
         data = json.dumps(payload).encode("utf-8")
@@ -125,7 +147,11 @@ class JeevesChair:
                         )
                 self.handled.append("list")
             return
-        # silent shop: ACK / DONE only
+        # silent shop: ACK / DONE only — never !bored, never OFFER/claim (K1)
+        if is_bored(text):
+            # K1: ear owns idle pings; chair never claims or replies in shop.
+            self.handled.append("ignored_bored")
+            return
         ack = parse_ack(text)
         if ack:
             st, row = accept_job(self.home, src, target, ack.task, ack.repo, ack.number)
@@ -147,10 +173,6 @@ class JeevesChair:
             )
             self._post_report({"op": "worker_state", "nick": src, "state": "idle"})
             self.handled.append(f"done:{src}:{done.repo}#{done.number}:{st}")
-            return
-        # CAST IRON: never !bored
-        if is_bored(text):
-            self.handled.append("ignored_bored")
             return
 
     def _run(self) -> None:
