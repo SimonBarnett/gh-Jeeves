@@ -57,7 +57,9 @@ def test_k1_jeeves_chair_source_has_no_offer_call():
 def test_k1_bob_ear_owns_bored_offer_path():
     src = inspect.getsource(BobEar)
     assert "is_bored" in src
-    assert "format_offer" in src
+    # K11: ear owns OFFER via EarOfferState (not chair; not multi-line ASSIGN)
+    assert "EarOfferState" in src or "offer_state" in src
+    assert "OFFER" in src or "offer" in src
 
 
 @pytest.mark.parametrize(
