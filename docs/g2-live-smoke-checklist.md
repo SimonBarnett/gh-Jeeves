@@ -71,3 +71,10 @@ After deploy, confirm with `WHOIS Jeeves` that every live `#{machine}` shop plus
 
 See `docs/g2-live-smoke-checklist.md` (FR #55 section) and `jeeves.channel_join.AutoJoinController`.
 
+
+## Operator note (FR #52, merged PR #62)
+
+Jeeves grants `+h` to authenticated `bob-*` and `+o` to authenticated `simon` (fleet host) via services account (SASL / account-notify / extended-join). Workers get no modes. `!sweep [#chan]` is simon-only and posts no channel text.
+
+G2: check `NAMES` on `#bobiverse` and a shop (e.g. `#flamingo`) after bob/simon join. Do not edit Ergo `ircd.yaml` for modes (ChanServ AMODE / registration remains operator-owned).
+
