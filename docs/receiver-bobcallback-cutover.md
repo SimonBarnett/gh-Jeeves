@@ -8,8 +8,8 @@ Local machine / ionos only. **Never** edit Ergo or restart unrelated services fr
 |------|-----------|
 | Listen | Configurable; ionos default **127.0.0.1:19781** (IIS reverse-proxy) |
 | GET `/bob/v1/report`, `/bob/v1/digest`, `/digest` | Public digest JSON (machines, cursor_pools, pcent, lastSeen, queue) |
-| POST `/bob/v1/report` | Requires **`X-Bob-Secret`** → 401 if missing/wrong |
-| POST `/bob/v1/git` | Requires **`X-Bob-Secret`** when secret configured; secret-field filter (K14) |
+| POST `/bob/v1/report` | Requires **`X-Bob-Secret`** → 401 if missing/wrong (when secret configured / `bob.secret` present) |
+| POST `/bob/v1/git` | **No** `X-Bob-Secret` (fleet hooks carry no secret; vision Trust / BRIEF). Secret-field filter (K14) only |
 | POST `/bob/v1/intake` | Requires **`X-Bob-Secret`** when secret configured |
 | Secret source | `BOB_CALLBACK_SECRET` / `BOB_SECRET` env, or `bob.secret` file under digest home — **never logged** |
 

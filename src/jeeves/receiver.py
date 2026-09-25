@@ -41,9 +41,10 @@ class DigestState:
         self.intake_filer = FakeGitHubFiler()
         self.intake_rate = RateLimiter(self.intake_cfg.rate_per_min)
         self.intake_logs: list[str] = []
-        # FR #47: X-Bob-Secret for write endpoints.
-        # G1 StubReceiver(): bob_secret=None → do not require (avoid ambient ~/.grok secrets).
-        # Production: pass bob_secret or set BOB_CALLBACK_SECRET / BOB_REQUIRE_SECRET=1.
+        # FR #47: X-Bob-Secret for report/intake writes (never /bob/v1/git — fleet hooks
+        # carry no secret; see docs/vision.md Trust + JEEVES_BRIEF §4.1 / §8).
+        # G1 StubReceiver(bob_secret=None): ignore ambient ~/.grok secrets unless
+        # BOB_REQUIRE_SECRET / env secret / digest-home bob.secret is present.
         env_secret = load_bob_secret(homes=[self.home])
         if bob_secret is not None:
             self.bob_secret = bob_secret
@@ -58,8 +59,15 @@ class DigestState:
             env_explicit = bool(
                 (os.environ.get("BOB_CALLBACK_SECRET") or os.environ.get("BOB_SECRET") or "").strip()
             )
-            # Only require when caller passed a secret, env sets one, or BOB_REQUIRE_SECRET
-            self.require_secret = (bob_secret is not None and bool(bob_secret)) or env_explicit or env_req
+            home_secret_file = any(
+                (self.home / name).is_file() for name in ("bob.secret", ".bob-secret")
+            )
+            if bob_secret is not None:
+                # explicit constructor arg: empty → off; non-empty → on
+                self.require_secret = bool(bob_secret) or env_req
+            else:
+                # production file under digest home must arm auth (cutover doc)
+                self.require_secret = env_explicit or env_req or home_secret_file
             if self.require_secret and not self.bob_secret:
                 self.bob_secret = env_secret
         else:
@@ -93,7 +101,7 @@ def make_handler(state: DigestState):
             return {k: v for k, v in self.headers.items()}
 
         def _require_write_secret(self) -> bool:
-            """FR #47: every write POST needs X-Bob-Secret when require_secret."""
+            """FR #47: report/intake POSTs need X-Bob-Secret when require_secret."""
             if not state.require_secret:
                 return True
             return check_bob_secret(self._hdrs(), state.bob_secret)
@@ -143,13 +151,10 @@ def make_handler(state: DigestState):
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
-            # All write paths require X-Bob-Secret when configured
-            if path in (
-                "/bob/v1/git",
-                "/bob/v1/report",
-                "/bob/v1/intake",
-                "/bob/v1/intake/",
-            ):
+            # Report/intake writes need X-Bob-Secret when configured.
+            # /bob/v1/git must NOT — fleet GitHub hooks carry no secret (vision Trust;
+            # BRIEF: "no HMAC (the fleet hooks carry no secret)").
+            if path in ("/bob/v1/report", "/bob/v1/intake", "/bob/v1/intake/"):
                 if not self._require_write_secret():
                     self.send_response(401)
                     self.end_headers()

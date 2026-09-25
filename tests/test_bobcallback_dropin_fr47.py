@@ -65,13 +65,17 @@ def test_post_report_401_without_secret(tmp_path: Path):
         rx.stop()
 
 
-def test_post_git_401_without_secret(tmp_path: Path):
+def test_post_git_no_x_bob_secret_even_when_report_requires(tmp_path: Path):
+    """Vision Trust / BRIEF: fleet GIT hooks carry no secret — /git must not 401."""
     home = tmp_path / "d"
     home.mkdir()
     rx = StubReceiver(home, bob_secret=SECRET, require_secret=True)
     port = rx.start()
     try:
         base = f"http://127.0.0.1:{port}"
+        # report still 401 without secret
+        code_r, _ = _post(base, {"op": "merge", "machine": "flamingo"}, secret=None)
+        assert code_r == 401
         data = b'{"zen":"x"}'
         req = urllib.request.Request(
             base + "/bob/v1/git",
@@ -79,11 +83,33 @@ def test_post_git_401_without_secret(tmp_path: Path):
             headers={"Content-Type": "application/json", "X-GitHub-Event": "ping"},
             method="POST",
         )
-        try:
-            urllib.request.urlopen(req, timeout=5)
-            assert False, "expected 401"
-        except urllib.error.HTTPError as e:
-            assert e.code == 401
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert resp.status in (200, 204)
+    finally:
+        rx.stop()
+
+
+def test_digest_home_bob_secret_file_requires_report_auth(tmp_path: Path, monkeypatch):
+    """Cutover: bob.secret under digest home must arm require_secret (not env-only)."""
+    monkeypatch.delenv("BOB_CALLBACK_SECRET", raising=False)
+    monkeypatch.delenv("BOB_SECRET", raising=False)
+    monkeypatch.delenv("BOB_REQUIRE_SECRET", raising=False)
+    monkeypatch.delenv("BOB_CALLBACK_SECRET_FILE", raising=False)
+    home = tmp_path / "d"
+    home.mkdir()
+    (home / "bob.secret").write_text(SECRET + "\n", encoding="utf-8")
+    rx = StubReceiver(home)  # bob_secret=None — discover file under home
+    assert rx.state.require_secret is True
+    assert rx.state.bob_secret == SECRET
+    port = rx.start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        code, _ = _post(base, {"op": "merge", "machine": "ionos", "online": True}, secret=None)
+        assert code == 401
+        code2, _ = _post(
+            base, {"op": "merge", "machine": "ionos", "online": True}, secret=SECRET
+        )
+        assert code2 in (200, 204)
     finally:
         rx.stop()
 
