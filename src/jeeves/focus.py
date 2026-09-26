@@ -815,12 +815,67 @@ def owner_account_name() -> str:
     return raw or "simon"
 
 
-def may_mutate_focus(nick: str, *, account: str | None = None, mode_grants_live: bool = False) -> bool:
-    """Only owner nick (simon / simon-*) with matching services account when mode_grants live."""
+def focus_mutator_nicks() -> set[str]:
+    """FR #170: exact nicks allowed to !focus/!unfocus in addition to the owner.
+
+    Env ``JEEVES_FOCUS_MUTATORS`` = comma-separated nicks (default empty).
+    """
+    import os
+
+    raw = (os.environ.get("JEEVES_FOCUS_MUTATORS") or "").strip()
+    if not raw:
+        return set()
+    return {p.strip().lower() for p in raw.split(",") if p.strip()}
+
+
+def focus_mutator_accounts() -> set[str]:
+    """FR #170: additive services accounts that may !focus/!unfocus.
+
+    Env ``JEEVES_FOCUS_MUTATOR_ACCOUNTS`` = comma-separated accounts (default empty).
+    """
+    import os
+
+    raw = (os.environ.get("JEEVES_FOCUS_MUTATOR_ACCOUNTS") or "").strip()
+    if not raw:
+        return set()
+    return {p.strip().lower() for p in raw.split(",") if p.strip()}
+
+
+def focus_mutator_via(
+    nick: str, *, account: str | None = None, mode_grants_live: bool = False
+) -> str | None:
+    """Return ``owner`` / ``allowlist`` if allowed, else ``None``.
+
+    Owner path unchanged (FR #107). Allowlist is additive (FR #170):
+    - exact nick in ``JEEVES_FOCUS_MUTATORS`` (no wildcards)
+    - and/or services account in ``JEEVES_FOCUS_MUTATOR_ACCOUNTS``
+    When mode_grants is live and a nick-listed mutator has no account, trust
+    is by nick (same model as ``!ignore`` for ``bob-*``).
+    """
     n = (nick or "").strip().lower()
+    if not n:
+        return None
+    acct = (account or "").strip().lower()
     owner = owner_account_name()
-    if n != owner and not n.startswith(f"{owner}-"):
-        return False
-    if mode_grants_live:
-        return (account or "").strip().lower() == owner
-    return True
+
+    if n == owner or n.startswith(f"{owner}-"):
+        if mode_grants_live:
+            return "owner" if acct == owner else None
+        return "owner"
+
+    allow_accts = focus_mutator_accounts()
+    if acct and acct in allow_accts:
+        return "allowlist"
+
+    allow_nicks = focus_mutator_nicks()
+    if n in allow_nicks:
+        # Nick allowlist: exact match. No account → nick trust. Account present
+        # still allowed when nick is listed (ops ear often has account=none).
+        return "allowlist"
+
+    return None
+
+
+def may_mutate_focus(nick: str, *, account: str | None = None, mode_grants_live: bool = False) -> bool:
+    """Owner (FR #107) or additive allowlist (FR #170)."""
+    return focus_mutator_via(nick, account=account, mode_grants_live=mode_grants_live) is not None

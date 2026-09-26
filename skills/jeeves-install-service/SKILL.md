@@ -38,13 +38,21 @@ Copy `config/bobjeeves.example.json` → `config/bobjeeves.json` (or
 - `jeeves_home` / `digest_home` (must differ)
 - `JEEVES_OWNER_ACCOUNT` (default `simon`) — Ergo services account that may
   `!focus` / `!unfocus` / `!ignore` / `!sweep` (nick `simon` or `simon-*`)
+- `JEEVES_FOCUS_MUTATORS` (FR #170, default empty) — comma-separated **exact**
+  nicks allowed to `!focus` / `!unfocus` / `!focus strict` **in addition** to
+  the owner (e.g. `bob-ionos`). No wildcards. Nick with no services account is
+  trusted by nick (same model as `!ignore` for `bob-*`).
+- `JEEVES_FOCUS_MUTATOR_ACCOUNTS` (FR #170, default empty) — optional additive
+  services accounts that may mutate focus.
 
 ### Owner account on Ergo (FR #107)
 
-`!focus` / `!sweep` / `!ignore` require a **registered** services account matching
-`JEEVES_OWNER_ACCOUNT` (default `simon`). Nick alone is not enough when mode
-grants are live. Jeeves learns accounts via extended-join, account-notify, and
-**WHO/WHOX** after JOIN (for nicks already in the channel).
+`!focus` / `!sweep` / `!ignore` for the **owner** require a **registered**
+services account matching `JEEVES_OWNER_ACCOUNT` (default `simon`) when mode
+grants are live. Nick alone is not enough for the owner path. Jeeves learns
+accounts via extended-join, account-notify, and **WHO/WHOX** after JOIN (for
+nicks already in the channel). FR #170 allowlisted nicks may mutate focus
+without an account when listed in `JEEVES_FOCUS_MUTATORS`.
 
 If `accounts.registration.enabled` is false on Ergo (ionos), an oper must create
 the account, for example:
