@@ -151,4 +151,4 @@ def test_auto_exception_label_constant_and_ensure_tool():
     doc = (root / "docs" / "exception-report.md").read_text(encoding="utf-8")
     assert "ensure_auto_exception_label" in doc
     assert "auto-exception" in doc
-    assert "no LLM" in doc.lower()
+    assert "no llm" in doc.lower()
