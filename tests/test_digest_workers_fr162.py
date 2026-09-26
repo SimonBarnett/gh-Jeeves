@@ -125,3 +125,33 @@ def test_not_one_entry_per_machine_only(tmp_path: Path):
     assert len(snap["machines"]["ionos"]["workers"]) == 2
     assert "ionos-11" in snap["workers"]
     assert "ionos-22" in snap["workers"]
+
+
+def test_coerce_ear_pid_without_nick_invents_mid_pid():
+    """Hostile: ear row with bare pid key and no nick still yields one nick key."""
+    out = coerce_workers(
+        "marchhare",
+        {"8592": {"pid": "8592", "state": "busy", "working_on": "orphan"}},
+    )
+    assert set(out.keys()) == {"marchhare-8592"}
+    assert "8592" not in out
+    assert out["marchhare-8592"]["nick"] == "marchhare-8592"
+    assert out["marchhare-8592"]["working_on"] == "orphan"
+
+
+def test_nick_keyed_keeps_nick_row_when_ghost_disagrees():
+    """Hostile: digit ghost must not overwrite an existing nick-keyed seat."""
+    cleaned = nick_keyed_machine_workers(
+        {
+            "ionos-12916": {"state": "idle", "job": None, "working_on": "", "ts": "t1"},
+            "12916": {
+                "pid": "12916",
+                "nick": "ionos-12916",
+                "state": "busy",
+                "working_on": "stale-ghost",
+            },
+        }
+    )
+    assert set(cleaned.keys()) == {"ionos-12916"}
+    assert cleaned["ionos-12916"]["state"] == "idle"
+    assert cleaned["ionos-12916"].get("working_on") in ("", None)
