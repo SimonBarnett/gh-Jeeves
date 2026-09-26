@@ -8,10 +8,14 @@ description: >
 
 # jeeves-release
 
-Seed FR: #22. No local playbook was harvested for this yet; steps below are
-from `docs/migration-plan.md` and the brief.
+Seed FR: #22. Steps from `docs/migration-plan.md` and the brief.
 
-Agentic control is an overlay: the token-less path must never depend on this skill.
+## Overlay
+
+**Agentic control is an overlay.** The token-less path (brief section 0 / issue #1)
+must **never** depend on this skill or an LLM. Scripts own G1; operators own
+`-Apply`. **Never** touch Ergo / BobIrcd / `ircd.yaml`. FR workers never
+`-Apply` on production.
 
 ```mermaid
 flowchart LR
@@ -34,3 +38,30 @@ flowchart LR
 5. **Rollback:** reinstall the previous tag via `Deploy-BobJeevesRelease.ps1`,
    or re-enable the legacy chair task on the tagged legacy checkout. The queue
    format stays compatible.
+
+## Commands
+
+CI-safe **dry-run** first (default for the deploy script; never mutates):
+
+```powershell
+python -m jeeves.release_tool --dry-run --json
+python -m jeeves release --dry-run --json
+
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\Deploy-BobJeevesRelease.ps1 -DryRun -Json
+```
+
+Operator apply (elevated, ionos only — not FR workers):
+
+```powershell
+powershell -File tools\Deploy-BobJeevesRelease.ps1 -Apply -Tag vX.Y.Z -Json
+```
+
+Env: `JEEVES_RELEASE_TAG` / `JEEVES_EXPECTED_TAG` for drift. Exit codes: `0` ok, `2` plan/skill errors.
+
+## Tests
+
+```text
+pytest -q tests/test_skill_release_fr22.py tests/test_version_drift_fr6.py
+```
+
+Related: `jeeves-install-service`, `jeeves-health`, `jeeves-token-less-gate`.

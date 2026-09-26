@@ -34,8 +34,9 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
             "queue",
             "announce",
             "worker-state",
+            "release",
         ),
-        help="Process role (default all); *-tools = report-only (FR #8/#19/#20/#21)",
+        help="Process role (default all); *-tools = report-only skill CLIs",
     )
     p.add_argument("--nick", default=os.environ.get("AGENTIC_IRC_CHAIR_NICK") or "Jeeves")
     p.add_argument("--host", default=os.environ.get("AGENTIC_IRC_HOST") or "127.0.0.1")
@@ -166,6 +167,10 @@ def main(argv: list[str] | None = None) -> int:
         from . import worker_state_tool as worker_state_tool_mod
 
         return worker_state_tool_mod.main(raw[1:])
+    if raw and raw[0] == "release":
+        from . import release_tool as release_tool_mod
+
+        return release_tool_mod.main(raw[1:])
     args = _parse(argv)
     if args.mode == "dry-run":
         import json
