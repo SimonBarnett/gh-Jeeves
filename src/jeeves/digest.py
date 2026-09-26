@@ -190,6 +190,18 @@ def coerce_machine(mid: str, raw: Any) -> dict[str, Any]:
     for k in ("running", "queued", "uptime_since", "fuel", "fuel_mode", "agent", "model"):
         if k in raw and raw[k] is not None:
             base[k] = raw[k]
+    # agentic_build #387: xAI weekly remaining + reset (omit when unknown)
+    if "weekly" in raw and raw.get("weekly") is not None and str(raw.get("weekly")) != "":
+        try:
+            base["weekly"] = int(raw["weekly"])
+        except (TypeError, ValueError):
+            pass
+    if raw.get("period_end"):
+        base["period_end"] = str(raw["period_end"])
+    if raw.get("cursor_period_end"):
+        base["cursor_period_end"] = str(raw["cursor_period_end"])
+    if raw.get("cursor_label"):
+        base["cursor_label"] = str(raw["cursor_label"])
     try:
         base["running"] = int(base.get("running") or 0)
     except (TypeError, ValueError):
@@ -560,7 +572,9 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
             if "working_on" in payload:
                 ent["working_on"] = str(payload.get("working_on") or "")
             if isinstance(payload.get("pcent"), dict):
-                ent["pcent"] = payload["pcent"]
+                # Empty {} must not wipe known peer pcent (marchhare Cursor n/a).
+                if payload["pcent"] or not isinstance(ent.get("pcent"), dict) or not ent.get("pcent"):
+                    ent["pcent"] = payload["pcent"]
             if payload.get("lastSeen") or payload.get("last_seen"):
                 ent["lastSeen"] = str(payload.get("lastSeen") or payload.get("last_seen"))
             else:
@@ -575,6 +589,18 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
             for k in ("running", "queued", "fuel", "fuel_mode", "uptime_since", "nick", "shop"):
                 if k in payload and payload[k] is not None:
                     ent[k] = payload[k]
+            # agentic_build #387: persist xAI weekly % + period_end from ear merge POST
+            if "weekly" in payload and payload.get("weekly") is not None and str(payload.get("weekly")) != "":
+                try:
+                    ent["weekly"] = int(payload["weekly"])
+                except (TypeError, ValueError):
+                    pass
+            if payload.get("period_end"):
+                ent["period_end"] = str(payload["period_end"])
+            if payload.get("cursor_period_end"):
+                ent["cursor_period_end"] = str(payload["cursor_period_end"])
+            if payload.get("cursor_label"):
+                ent["cursor_label"] = str(payload["cursor_label"])
             # nested worker update by pid
             pid_raw = payload.get("pid")
             if pid_raw is not None and str(pid_raw) != "":
