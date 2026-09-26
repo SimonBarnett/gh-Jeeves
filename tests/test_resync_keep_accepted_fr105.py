@@ -273,3 +273,36 @@ def test_scheduler_defers_orphan_release_until_ready(tmp_path: Path, monkeypatch
     assert load_queue(home)["accepted"] == [] or all(
         r.get("nick") in set() for r in load_queue(home)["accepted"]
     )
+
+
+def test_membership_ready_ignores_bobiverse_in_shops(tmp_path: Path):
+    """MRB #128 fix: shops including #bobiverse must still become ready."""
+    from jeeves.local_ircd import IrcClient, LocalIrcd
+    from jeeves.roles import JeevesChair
+
+    home = tmp_path / "d"
+    home.mkdir()
+    ircd = LocalIrcd()
+    port = ircd.start()
+    try:
+        client = IrcClient("127.0.0.1", port, "Jeeves")
+        chair = JeevesChair(
+            "127.0.0.1",
+            port,
+            home,
+            "http://127.0.0.1:9",
+            client=client,
+            shops=["#bobiverse", "#marchhare", "#flamingo"],
+            auto_join=False,
+        )
+        assert chair.membership_ready is False
+        chair.note_names_complete("#bobiverse")  # ignored
+        assert chair.membership_ready is False
+        chair.note_names_complete("#marchhare")
+        assert chair.membership_ready is False
+        chair.note_names_complete("#flamingo")
+        assert chair.membership_ready is True
+        assert "membership_ready" in chair.handled
+    finally:
+        client.close()
+        ircd.stop()
