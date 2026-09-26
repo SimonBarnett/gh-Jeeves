@@ -42,6 +42,10 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 | `mrb1-pass` | Fit approved — engineering allowed |
 | `mrb1-reject` | Fit rejected — no PR |
 
+Ensure on the repo before intake uses them:
+
+`python tools/ensure_mrb1_labels.py --repo SimonBarnett/gh-Jeeves`
+
 ## Related
 
 - `docs/mrb-gates.md` (SoT for FR #151)
