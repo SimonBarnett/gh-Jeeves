@@ -183,6 +183,16 @@ class JeevesChair:
         self.mode_grants: ModeGrantController | None = None
         if hasattr(self.client, "send_raw"):
             self.mode_grants = ModeGrantController(self.client, jeeves_nick=nick, rate_s=0.05)
+            # FR #160: observe unauthenticated simon; no Ergo config / no SAIDENTIFY
+            try:
+                from .simon_auto_auth import SimonAutoAuthController
+
+                self.mode_grants.simon_auto = SimonAutoAuthController(
+                    send_pm=lambda n, msg: self._pm(n, msg),
+                    send_hint=True,
+                )
+            except Exception:
+                pass
 
         self.auto_join_ctrl: AutoJoinController | None = None
         if auto_join and hasattr(self.client, "send_raw"):

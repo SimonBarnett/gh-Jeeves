@@ -209,6 +209,8 @@ class ModeGrantController:
         self._clock = clock or time.time
         self.state = ModeGrantState()
         self._lock = threading.Lock()
+        # FR #160: optional observer for unauthenticated simon (no Ergo config edits)
+        self.simon_auto = None
 
     def set_account(self, nick: str, account: str | None) -> None:
         key = (nick or "").strip().lower()
@@ -279,6 +281,14 @@ class ModeGrantController:
                 if key not in self.state.unauth_logged:
                     self.state.unauth_logged.add(key)
                     self.state.events.append(f"unauth_skip:{nick}:{channel}")
+                # FR #160: record no_runtime_path for fleet-host simon without SASL
+                if is_simon_nick(nick) and self.simon_auto is not None:
+                    try:
+                        self.simon_auto.on_simon_presence(
+                            nick, account=p.account, host=p.host, channel=channel
+                        )
+                    except Exception:
+                        self.state.events.append(f"simon_auto_err:{nick}")
             return None
         if already_has_mode(p.modes, want):
             self.state.events.append(f"idempotent:{nick}:{channel}:+{want}")
