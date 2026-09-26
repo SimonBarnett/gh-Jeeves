@@ -183,12 +183,40 @@ def coerce_machine(mid: str, raw: Any) -> dict[str, Any]:
     return base
 
 
-def coerce_workers(mid: str, raw: Any) -> dict[str, Any]:
-    """Normalize machines.<id>.workers.
+def nick_keyed_machine_workers(workers: Any) -> dict[str, Any]:
+    """FR #162: exactly one entry per worker nick; drop digit-only pid ghosts."""
+    if not isinstance(workers, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, slot in workers.items():
+        key_s = str(key)
+        if key_s.isdigit():
+            continue
+        if isinstance(slot, dict):
+            out[key_s] = dict(slot)
+        else:
+            out[key_s] = slot
+    for key, slot in workers.items():
+        key_s = str(key)
+        if not key_s.isdigit() or not isinstance(slot, dict):
+            continue
+        nick = str(slot.get("nick") or "").strip()
+        if not nick or nick in out:
+            continue
+        promoted = dict(slot)
+        promoted.setdefault("nick", nick)
+        promoted.setdefault("pid", key_s)
+        out[nick] = promoted
+    return out
 
-    Two shapes coexist:
-    - Ear/TipForm pid keys: ``{"43052": {pid, nick, state, working_on, ...}}``
-    - FR #79 seat nick keys: ``{"flamingo-43052": {job, state, ts}}`` (top-level twin).
+
+def coerce_workers(mid: str, raw: Any) -> dict[str, Any]:
+    """Normalize machines.<id>.workers to nick-keyed seats (FR #162).
+
+    Ear/TipForm historically used pid keys (``{"43052": {pid, nick, ...}}``).
+    FR #162 requires exactly one entry per present worker, keyed by nick and
+    grouped under ``machines.<id>.workers`` — promote pid rows to their nick
+    and drop digit-only ghost twins.
     """
     if not isinstance(raw, dict):
         return {}
@@ -219,17 +247,25 @@ def coerce_workers(mid: str, raw: Any) -> dict[str, Any]:
             pid_s = str(int(str(key)))
         except ValueError:
             pid_s = key_s
-        out[pid_s] = {
-            "pid": pid_s,
-            "nick": str(e.get("nick") or f"{mid}-{pid_s}"),
-            "state": str(e.get("state") or "running"),
+        nick = str(e.get("nick") or f"{mid}-{pid_s}").strip()
+        if nick in out:
+            continue
+        job = e.get("job")
+        if job is None:
+            job = e.get("working_on")
+        state = str(e.get("state") or "running")
+        out[nick] = {
+            "state": state,
+            "job": job,
             "working_on": str(e.get("working_on") or e.get("job") or ""),
+            "ts": str(e.get("ts") or ""),
+            "nick": nick,
+            "pid": pid_s,
             "kind": str(e.get("kind") or ""),
             "agent": str(e.get("agent") or ""),
             "model": str(e.get("model") or ""),
         }
-    return out
-
+    return nick_keyed_machine_workers(out)
 
 
 # FR #79: log once when nick cannot map to a machine
@@ -261,8 +297,8 @@ def _refresh_machine_working_on(ent: dict[str, Any]) -> None:
     for key, slot in workers.items():
         if not isinstance(slot, dict):
             continue
-        # Skip pid aliases when the nick twin exists (same job twice).
-        if str(key).isdigit() and str(slot.get("nick") or "") in workers:
+        # FR #162: digit-only keys are ghosts; skip if present
+        if str(key).isdigit():
             continue
         if str(slot.get("state") or "").lower() != "busy":
             continue
@@ -276,6 +312,20 @@ def _refresh_machine_working_on(ent: dict[str, Any]) -> None:
     ent["working_on"] = best_job
 
 
+def prune_machine_worker_ghosts(doc: dict[str, Any]) -> None:
+    """In-place: nick-only workers under every machines.<id> (FR #162)."""
+    machines = doc.get("machines")
+    if not isinstance(machines, dict):
+        return
+    for mid, ent in list(machines.items()):
+        if not isinstance(ent, dict):
+            continue
+        ent = dict(ent)
+        ent["workers"] = nick_keyed_machine_workers(ent.get("workers"))
+        _refresh_machine_working_on(ent)
+        machines[mid] = ent
+
+
 def mirror_top_worker_to_machine(
     doc: dict[str, Any],
     nick: str,
@@ -283,10 +333,11 @@ def mirror_top_worker_to_machine(
     *,
     remove: bool = False,
 ) -> bool:
-    """FR #79: lockstep machines.<machine>.workers[nick] with top-level workers.
+    """FR #79 / #162: lockstep machines.<machine>.workers[nick] with top-level workers.
 
-    FR #13 / K12: also refresh machines.<id>.working_on so TipForm shows busy
-    while hidden seat runs look idle in the TUI.
+    One nick-keyed entry per present worker (no pid ghost twin). FR #13 / K12:
+    also refresh machines.<id>.working_on so TipForm shows busy while hidden
+    seat runs look idle in the TUI.
     """
     from .nicks import parse_worker_nick
 
@@ -310,7 +361,7 @@ def mirror_top_worker_to_machine(
     workers = dict(ent.get("workers") or {})
     if remove or entry is None:
         workers.pop(n, None)
-        workers.pop(str(pid), None)
+        workers.pop(str(pid), None)  # drop legacy pid ghost if present
     else:
         job = entry.get("job")
         if job is None:
@@ -325,16 +376,9 @@ def mirror_top_worker_to_machine(
         if entry.get("channel") is not None:
             slot["channel"] = entry.get("channel")
         workers[n] = slot
-        # pid alias for ear-shaped readers
-        workers[str(pid)] = {
-            "pid": str(pid),
-            "nick": n,
-            "state": slot["state"],
-            "working_on": slot["working_on"],
-            "job": slot.get("job"),
-            "ts": slot["ts"],
-        }
-    ent["workers"] = workers
+        # FR #162: never write pid ghost twin
+        workers.pop(str(pid), None)
+    ent["workers"] = nick_keyed_machine_workers(workers)
     _refresh_machine_working_on(ent)
     machines[mid] = coerce_machine(mid, ent)
     return True
@@ -347,6 +391,7 @@ def sync_all_top_workers_to_machines(doc: dict[str, Any], top_workers: dict[str,
     for nick, entry in top_workers.items():
         if isinstance(entry, dict):
             mirror_top_worker_to_machine(doc, str(nick), entry, remove=False)
+    prune_machine_worker_ghosts(doc)
 
 
 def _note_event(doc: dict[str, Any], kind: str, **fields: Any) -> None:
@@ -626,8 +671,10 @@ def public_digest_snapshot(home: Path, *, queue_home: Path | None = None) -> dic
         doc["workers"] = tw
         # FR #79: heal machines.<id>.workers so TipForm is not empty while top is busy
         sync_all_top_workers_to_machines(doc, tw)
+        # FR #162: nick-only keys; drop stale pid ghosts even if top was empty
+        prune_machine_worker_ghosts(doc)
     except Exception:
-        pass
+        prune_machine_worker_ghosts(doc)
     # FR #68: additive focus list (trays may ignore unknown keys)
     # FR #154: additive focus_strict boolean from focus.json (does not alter focus list)
     try:

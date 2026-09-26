@@ -157,4 +157,8 @@ def test_ear_pid_merge_still_works(tmp_path: Path):
     )
     assert out.ok
     fl = load_digest(home)["machines"]["flamingo"]["workers"]
-    assert "46804" in fl
+    # FR #162: ear pid rows promote to nick; no digit ghost key
+    assert "flamingo-46804" in fl
+    assert "46804" not in fl
+    assert fl["flamingo-46804"]["state"] == "busy"
+    assert fl["flamingo-46804"].get("working_on") == "FR x"

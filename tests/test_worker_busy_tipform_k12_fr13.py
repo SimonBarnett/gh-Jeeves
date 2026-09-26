@@ -34,13 +34,13 @@ def test_ack_busy_sets_machine_working_on_for_tipform(tmp_path: Path):
     doc = load_digest(home)
     m = doc["machines"]["marchhare"]
     assert m["working_on"] == job
-    # pid alias TipForm/ear shape
-    assert m["workers"]["31712"]["working_on"] == job
-    assert m["workers"]["31712"]["state"] == "busy"
-    # nick key also exposes working_on (not job-only)
+    # FR #162: nick-only workers (no pid ghost twin)
+    assert "31712" not in m["workers"]
+    assert m["workers"][nick]["state"] == "busy"
     assert m["workers"][nick].get("working_on") == job or m["workers"][nick].get("job") == job
     snap = public_digest_snapshot(home)
     assert snap["machines"]["marchhare"]["working_on"] == job
+    assert "31712" not in snap["machines"]["marchhare"]["workers"]
 
 
 def test_done_idle_clears_machine_working_on(tmp_path: Path):
@@ -54,7 +54,8 @@ def test_done_idle_clears_machine_working_on(tmp_path: Path):
     m = load_digest(home)["machines"]["flamingo"]
     assert m["working_on"] in ("", None)
     assert m["workers"][nick]["state"] == "idle"
-    assert m["workers"]["43052"].get("working_on") in ("", None)
+    assert "43052" not in m["workers"]
+    assert m["workers"][nick].get("working_on") in ("", None)
 
 
 def test_queue_accept_then_done_tipform_path(tmp_path: Path):
