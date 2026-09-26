@@ -78,6 +78,7 @@ class DiffStats:
     accepted_kept: int = 0
     accepted_released: int = 0
     skipped_github_down: bool = False
+    skipped_auth: bool = False  # FR #70: 401 / invalid token
     quiet: bool = False  # no material change
 
     @property
@@ -86,7 +87,9 @@ class DiffStats:
 
     def summary_line(self, total: int) -> str:
         """Length-safe one-liner for #bobiverse (FR #24 budget)."""
-        if self.skipped_github_down:
+        if self.skipped_auth:
+            body = f"Jeeves resync: auth-failed kept-queue total {total}"
+        elif self.skipped_github_down:
             body = f"Jeeves resync: github-down kept-queue total {total}"
         elif self.quiet:
             body = f"Jeeves resync: unchanged total {total}"
@@ -121,23 +124,38 @@ class FakeGitHub:
     pulls: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     closed_pulls: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     down: bool = False
+    auth_failed: bool = False  # FR #70: simulate 401 invalid token
+
+    def _maybe_auth(self) -> None:
+        if self.auth_failed:
+            raise HTTPError(
+                "https://api.github.com/",
+                401,
+                "Unauthorized",
+                hdrs=None,  # type: ignore[arg-type]
+                fp=None,
+            )
 
     def list_repos(self) -> list[str]:
+        self._maybe_auth()
         if self.down:
             raise URLError("github down")
         return list(self.repos)
 
     def list_open_issues(self, repo: str) -> list[dict[str, Any]]:
+        self._maybe_auth()
         if self.down:
             raise URLError("github down")
         return list(self.issues.get(repo) or [])
 
     def list_open_pulls(self, repo: str) -> list[dict[str, Any]]:
+        self._maybe_auth()
         if self.down:
             raise URLError("github down")
         return list(self.pulls.get(repo) or [])
 
     def list_recent_closed_pulls(self, repo: str) -> list[dict[str, Any]]:
+        self._maybe_auth()
         if self.down:
             raise URLError("github down")
         return list(self.closed_pulls.get(repo) or [])
@@ -471,18 +489,31 @@ def run_resync(
     except (URLError, HTTPError, OSError, TimeoutError) as exc:
         doc = load_queue(home)
         total = len(doc.get("unaccepted") or []) + len(doc.get("accepted") or [])
-        stats = DiffStats(skipped_github_down=True, quiet=True)
-        # never empty the queue because GitHub was down
+        auth = isinstance(exc, HTTPError) and int(getattr(exc, "code", 0) or 0) in (401, 403)
+        stats = DiffStats(
+            skipped_github_down=not auth,
+            skipped_auth=auth,
+            quiet=True,
+        )
+        # never empty the queue because GitHub was down / auth failed
         if outbox_append and not quiet_when_unchanged:
             outbox_append(stats.summary_line(total))
         log_path = home / "resync.log"
         prev = log_path.read_text(encoding="utf-8") if log_path.is_file() else ""
-        log_path.write_text(prev + f"\n{time.time()} github-down {exc!r}\n", encoding="utf-8")
-        log.info(
-            "event=resync phase=end result=github_down total=%s err=%s",
-            total,
-            type(exc).__name__,
-        )
+        kind = "auth-failed" if auth else "github-down"
+        log_path.write_text(prev + f"\n{time.time()} {kind} {type(exc).__name__}\n", encoding="utf-8")
+        # FR #70: log auth failure once per process (token never printed)
+        if auth:
+            log.warning(
+                "event=resync phase=end result=auth_failed total=%s (invalid/missing scope; resync skipped)",
+                total,
+            )
+        else:
+            log.info(
+                "event=resync phase=end result=github_down total=%s err=%s",
+                total,
+                type(exc).__name__,
+            )
         return stats
 
     before = load_queue(home)
