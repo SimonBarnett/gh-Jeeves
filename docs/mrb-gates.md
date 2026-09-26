@@ -31,6 +31,20 @@ flowchart LR
 Intake (`via-intake`) issues get `needs-mrb1` automatically (FR #151). Humans
 apply `mrb1-pass` or `mrb1-reject` after review.
 
+### Labels (must exist on the repo)
+
+GitHub rejects issue create with unknown labels (HTTP 422). Create once:
+
+```text
+python tools/ensure_mrb1_labels.py --repo SimonBarnett/gh-Jeeves
+```
+
+| Label | Color | Meaning |
+|-------|-------|---------|
+| `needs-mrb1` | FBCA04 | Awaiting fit check |
+| `mrb1-pass` | 0E8A16 | Fit approved — engineering allowed |
+| `mrb1-reject` | B60205 | Fit rejected — no PR |
+
 ## MRB #2 — implementation check (fidelity)
 
 **Question:** Did the PR implement what the **approved** issue asked for?

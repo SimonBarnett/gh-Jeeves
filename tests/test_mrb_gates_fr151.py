@@ -50,3 +50,17 @@ def test_mrb_enforcement_points_at_gates_doc():
     text = (ROOT / "docs" / "mrb-enforcement.md").read_text(encoding="utf-8")
     assert "mrb-gates.md" in text
     assert "MRB #2" in text or "FR #151" in text
+
+
+def test_mrb_gates_doc_requires_label_ensure():
+    text = (ROOT / "docs" / "mrb-gates.md").read_text(encoding="utf-8")
+    assert "ensure_mrb1_labels" in text
+    assert "422" in text or "must exist" in text.lower()
+
+
+def test_ensure_mrb1_labels_tool_lists_three_labels():
+    tool = (ROOT / "tools" / "ensure_mrb1_labels.py").read_text(encoding="utf-8")
+    assert "needs-mrb1" in tool
+    assert "mrb1-pass" in tool
+    assert "mrb1-reject" in tool
+    assert "LABELS" in tool
