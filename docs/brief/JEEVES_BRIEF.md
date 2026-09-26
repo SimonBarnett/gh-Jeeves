@@ -74,7 +74,7 @@ gh-Jeeves ships a `skills/` directory (the same SKILL.md layout as the fleet ski
 Seed skills (each is a seed FR with a test or lint that checks the skill exists and its commands run):
 - **harvest** (REQUIRED): the honesty-box rule. Any agent that uses the gh-Jeeves skills and learns something new must PR it back to `SimonBarnett/gh-Jeeves/skills`, or open an issue/FR. It also covers harvesting into Jeeves from the other fleet skill books (agentic_build, agentic_irc, skills-visionary). It follows the same pattern as the fleet `bob-harvest-honesty-box` / `harvest-skills-visionary` skills, and is always auto-harvest.
 - **jeeves-install-service**: install, repair or upgrade the Jeeves Windows service idempotently (#330); never touch Ergo/BobIrcd.
-- **jeeves-health**: check the service, IRC presence in #bobiverse and every #{machine}, webhook lastSeen, version drift and throttle backoff.
+- **jeeves-health**: check the service, IRC presence in #bobiverse and every #{machine}, webhook lastSeen, version drift and throttle backoff. **FR #18** + `python -m jeeves.health --dry-run --json` / `tests/test_skill_health_fr18.py`.
 - **jeeves-queue**: read, explain, resync, backfill and repair the queue (supersede rules, `!list`), with a dry-run-first rule for any manual edit.
 - **jeeves-announce-debug**: a GitHub delivery isn't announced (hook deliveries, receiver secret filter #206, chair-outbox, 417 long lines).
 - **jeeves-worker-state**: interpret ACK/DONE, busy/idle on the webhook, stale START tiles, stuck accepted items.
