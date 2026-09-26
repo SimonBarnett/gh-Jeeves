@@ -17,7 +17,7 @@ jobs:
           python-version: "3.12"
       - name: Require Seat: trailer in PR body
         env:
-          BODY: ${{ github.event.pull_request.body }}
+          BODY: ${{ github.event.pull_request.body}}
         run: |
           python - <<'PY'
           import os, re, sys
