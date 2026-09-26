@@ -186,7 +186,16 @@ class JeevesChair:
 
         self.auto_join_ctrl: AutoJoinController | None = None
         if auto_join and hasattr(self.client, "send_raw"):
-            seed = list(dict.fromkeys(["#bobiverse", *[normalize_channel(s) for s in self.shops]]))
+            # FR #139: always seed #agentic_irc so restarts do not drop it before LIST.
+            seed = list(
+                dict.fromkeys(
+                    [
+                        "#bobiverse",
+                        "#agentic_irc",
+                        *[normalize_channel(s) for s in self.shops],
+                    ]
+                )
+            )
             self.auto_join_ctrl = AutoJoinController(
                 self.client,
                 nick=nick,

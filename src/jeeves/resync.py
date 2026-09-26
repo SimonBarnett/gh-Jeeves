@@ -363,8 +363,29 @@ def reconcile_queue(
     keep every accepted row — still add/remove/retype unaccepted from GitHub.
     When True, keep accepted only if nick ∈ connected_nicks; else release and
     idle that nick in ``workers``.
+
+    FR #139: hold ``queue_lock`` for the whole load→mutate→save so an ACK that
+    lands while GitHub fetch ran is not wiped by a stale save.
     """
+    from .queue import queue_lock
+
     connected_nicks = connected_nicks or set()
+    with queue_lock(home):
+        return _reconcile_queue_locked(
+            home,
+            desired,
+            connected_nicks=connected_nicks,
+            release_orphans=release_orphans,
+        )
+
+
+def _reconcile_queue_locked(
+    home: Path,
+    desired: list[dict[str, Any]],
+    *,
+    connected_nicks: set[str],
+    release_orphans: bool,
+) -> DiffStats:
     doc = load_queue(home)
     stats = DiffStats()
 
