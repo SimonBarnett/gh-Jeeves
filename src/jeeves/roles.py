@@ -640,11 +640,17 @@ class JeevesChair:
             return acct == owner
         return False
 
-    def _focus_mutator_ok(self, src: str) -> bool:
-        """FR #68 / #107: owner nick; services account keyed by *sender* nick."""
+    def _focus_mutator_via(self, src: str) -> str | None:
+        """FR #68 / #107 / #170: owner or additive allowlist; None if denied."""
+        from .focus import focus_mutator_via
+
         live = self.mode_grants is not None
         acct = self._account_for_nick(src) if live else None
-        return may_mutate_focus(src, account=acct, mode_grants_live=live)
+        return focus_mutator_via(src, account=acct, mode_grants_live=live)
+
+    def _focus_mutator_ok(self, src: str) -> bool:
+        """FR #68 / #107 / #170: owner nick or JEEVES_FOCUS_MUTATORS allowlist."""
+        return self._focus_mutator_via(src) is not None
 
     def _handle_focus_cmds(self, src: str, text: str) -> bool:
         """FR #68: !focus / !unfocus — PM only."""
@@ -652,7 +658,8 @@ class JeevesChair:
             arg = parse_focus_cmd(text)
             if arg is None:
                 arg = ""
-            if not self._focus_mutator_ok(src):
+            via = self._focus_mutator_via(src)
+            if not via:
                 live = self.mode_grants is not None
                 acct = self._account_for_nick(src) if live else None
                 self._pm(src, "focus: denied (owner account required)")
@@ -668,13 +675,17 @@ class JeevesChair:
             for line in lines:
                 self._pm(src, line)
             self.handled.append(f"focus:{src}:{arg or '*'}")
-            log.info("cmd=focus nick=%s replies=%s", src, len(lines))
+            if via == "allowlist":
+                log.info("cmd=focus nick=%s via=allowlist replies=%s", src, len(lines))
+            else:
+                log.info("cmd=focus nick=%s replies=%s", src, len(lines))
             return True
         if is_unfocus(text) or parse_unfocus_cmd(text) is not None:
             arg = parse_unfocus_cmd(text)
             if arg is None:
                 arg = ""
-            if not self._focus_mutator_ok(src):
+            via = self._focus_mutator_via(src)
+            if not via:
                 live = self.mode_grants is not None
                 acct = self._account_for_nick(src) if live else None
                 self._pm(src, "unfocus: denied (owner account required)")
@@ -690,7 +701,10 @@ class JeevesChair:
             for line in lines:
                 self._pm(src, line)
             self.handled.append(f"unfocus:{src}:{arg or '*'}")
-            log.info("cmd=unfocus nick=%s replies=%s", src, len(lines))
+            if via == "allowlist":
+                log.info("cmd=unfocus nick=%s via=allowlist replies=%s", src, len(lines))
+            else:
+                log.info("cmd=unfocus nick=%s replies=%s", src, len(lines))
             return True
         return False
 
