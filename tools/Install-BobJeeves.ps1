@@ -15,6 +15,10 @@ param(
     [string]$IrcHost,
     [int]$IrcPort = 0,
     [string]$ReceiverPort,
+    # FR #72: X-Bob-Secret path for LocalSystem (nssm BOB_CALLBACK_SECRET_FILE)
+    [string]$ReceiverSecretFile,
+    [string]$PasswordFile,
+    [string]$SaslPasswordFile,
     [string]$PythonPath,
     [string]$NssmPath,
     [switch]$Tls,
@@ -23,8 +27,10 @@ param(
     [switch]$Apply,
     [switch]$Json,
     [switch]$Production,
-    # FR #70: disable GitHub resync (JEEVES_RESYNC_DISABLE=1) when no token yet
+    # FR #70 / #72: disable GitHub resync (JEEVES_RESYNC_DISABLE=1) when no token yet
     [switch]$ResyncDisable,
+    # Alias used by FR #72 PR #98
+    [switch]$DisableResync,
     # FR #70: securely prompt for GitHub token; store as github.token (ACL service account)
     [switch]$PromptGitHubToken,
     [string]$GitHubTokenFile
@@ -97,14 +103,32 @@ $JeevesHome = [IO.Path]::GetFullPath((Expand-EnvPath $JeevesHome))
 $DigestHome = [IO.Path]::GetFullPath((Expand-EnvPath $DigestHome))
 
 $SaslUser = ''
-$SaslPasswordFile = ''
-$PasswordFile = ''
+if (-not $SaslPasswordFile) { $SaslPasswordFile = '' }
+if (-not $PasswordFile) { $PasswordFile = '' }
+if (-not $ReceiverSecretFile) { $ReceiverSecretFile = '' }
+# FR #70/#72: either switch name disables resync
+$ResyncDisableFlag = [bool]($ResyncDisable -or $DisableResync)
 if ($cfg) {
     if ($cfg.sasl_user) { $SaslUser = [string]$cfg.sasl_user }
-    if ($cfg.sasl_password_file) { $SaslPasswordFile = Expand-EnvPath ([string]$cfg.sasl_password_file) }
-    if ($cfg.password_file) { $PasswordFile = Expand-EnvPath ([string]$cfg.password_file) }
+    if (-not $SaslPasswordFile -and $cfg.sasl_password_file) {
+        $SaslPasswordFile = Expand-EnvPath ([string]$cfg.sasl_password_file)
+    }
+    if (-not $PasswordFile -and $cfg.password_file) {
+        $PasswordFile = Expand-EnvPath ([string]$cfg.password_file)
+    }
+    if (-not $ReceiverSecretFile -and $cfg.receiver_secret_file) {
+        $ReceiverSecretFile = Expand-EnvPath ([string]$cfg.receiver_secret_file)
+    }
+    if ($cfg.PSObject.Properties.Name -contains 'disable_resync' -and $cfg.disable_resync -eq $true) {
+        $ResyncDisableFlag = $true
+    }
     if ($cfg.tls -eq $true -and -not $NoTls) { $Tls = $true }
 }
+if ($SaslPasswordFile) { $SaslPasswordFile = Expand-EnvPath $SaslPasswordFile }
+if ($PasswordFile) { $PasswordFile = Expand-EnvPath $PasswordFile }
+if ($ReceiverSecretFile) { $ReceiverSecretFile = Expand-EnvPath $ReceiverSecretFile }
+# Keep plan field name used by FR #70
+$ResyncDisable = $ResyncDisableFlag
 
 # Build exact python -m jeeves command line (FR #48)
 $pyArgs = New-Object System.Collections.ArrayList
@@ -134,7 +158,10 @@ if ($SaslUser) {
     [void]$pyArgs.Add('--sasl-user')
     [void]$pyArgs.Add($SaslUser)
 }
-# password from file is loaded by start helper into env — never embed secret in sc/nssm args
+if ($ResyncDisableFlag) {
+    [void]$pyArgs.Add('--no-resync')
+}
+# password / secret paths go in nssm env only - never embed secret values in AppParameters
 $serviceCmdline = 'python ' + ($pyArgs -join ' ')
 
 $plan = [ordered]@{
@@ -159,9 +186,12 @@ $plan = [ordered]@{
     tls                  = [bool]$Tls
     receiver_bind        = $ReceiverBind
     receiver_port        = [int]$ReceiverPort
+    receiver_secret_file = $ReceiverSecretFile
     sasl_user            = $SaslUser
     sasl_password_file   = $SaslPasswordFile
     password_file        = $PasswordFile
+    disable_resync       = [bool]$ResyncDisableFlag
+    auth_mode            = $(if ($SaslUser) { 'sasl' } elseif ($PasswordFile) { 'server_password' } else { 'none' })
     homes_distinct       = ($JeevesHome.TrimEnd('\').ToLowerInvariant() -ne $DigestHome.TrimEnd('\').ToLowerInvariant())
     python               = $null
     nssm                 = $null
@@ -175,7 +205,7 @@ $plan = [ordered]@{
     recovery_restart     = $true
     service_cmdline      = $serviceCmdline
     python_args          = @($pyArgs)
-    resync_disable       = [bool]$ResyncDisable
+    resync_disable       = [bool]$ResyncDisableFlag
     github_token_file    = $null
     prompt_github_token  = [bool]$PromptGitHubToken
     steps                = New-Object System.Collections.ArrayList
@@ -249,6 +279,19 @@ if ($svc) {
 }
 [void]$plan.steps.Add("service cmdline: $($plan.service_cmdline)")
 [void]$plan.steps.Add("BOB_DIGEST_HOME=$DigestHome JEEVES_HOME=$JeevesHome")
+if ($ReceiverSecretFile) {
+    [void]$plan.steps.Add("BOB_CALLBACK_SECRET_FILE=$ReceiverSecretFile (X-Bob-Secret path for LocalSystem)")
+} else {
+    [void]$plan.warnings.Add('receiver_secret_file unset - LocalSystem will not see user ~/.grok/bob secrets unless set')
+}
+if ($PasswordFile -and -not $SaslUser) {
+    [void]$plan.steps.Add("auth=server_password AGENTIC_IRC_PASSWORD_FILE=$PasswordFile (no SASL)")
+} elseif ($SaslUser) {
+    [void]$plan.steps.Add("auth=sasl user=$SaslUser file=$SaslPasswordFile")
+}
+if ($ResyncDisableFlag) {
+    [void]$plan.steps.Add('resync disabled (--no-resync + JEEVES_RESYNC_DISABLE=1)')
+}
 [void]$plan.steps.Add('IRC connect retries with backoff if Ergo down (no BobIrcd start)')
 [void]$plan.steps.Add('start= auto (never Disabled) - FR #7 / K6')
 [void]$plan.steps.Add('sc.exe failure BobJeeves reset= 86400 actions= restart/60000/restart/60000/restart/60000')
@@ -259,8 +302,8 @@ if (-not $GitHubTokenFile) {
     $GitHubTokenFile = Join-Path $JeevesHome 'github.token'
 }
 $plan.github_token_file = $GitHubTokenFile
-if ($ResyncDisable) {
-    [void]$plan.steps.Add('AppEnvironmentExtra JEEVES_RESYNC_DISABLE=1 (FR #70)')
+if ($ResyncDisableFlag) {
+    [void]$plan.steps.Add('AppEnvironmentExtra JEEVES_RESYNC_DISABLE=1 (FR #70/#72)')
 } else {
     [void]$plan.steps.Add(('JEEVES_GITHUB_TOKEN_FILE={0} (token never in cmdline)' -f $GitHubTokenFile))
 }
@@ -342,16 +385,20 @@ if ($Apply) {
                     "AGENTIC_IRC_HOST=$IrcHost",
                     "AGENTIC_IRC_PORT=$IrcPort"
                 )
+                # FR #72: receiver secret path for LocalSystem (not user profile fallback)
+                if ($ReceiverSecretFile) {
+                    $envExtra += "BOB_CALLBACK_SECRET_FILE=$ReceiverSecretFile"
+                }
                 if ($SaslUser) { $envExtra += "AGENTIC_IRC_SASL_USER=$SaslUser" }
                 if ($SaslPasswordFile) { $envExtra += "AGENTIC_IRC_SASL_PASSWORD_FILE=$SaslPasswordFile" }
                 if ($PasswordFile) { $envExtra += "AGENTIC_IRC_PASSWORD_FILE=$PasswordFile" }
-                # FR #70: resync credential (file path only) or explicit disable
-                if ($ResyncDisable) {
+                # FR #70/#72: resync credential (file path only) or explicit disable
+                if ($ResyncDisableFlag) {
                     $envExtra += 'JEEVES_RESYNC_DISABLE=1'
                 } else {
                     $envExtra += ("JEEVES_GITHUB_TOKEN_FILE=$GitHubTokenFile")
                 }
-                if ($PromptGitHubToken -and -not $ResyncDisable) {
+                if ($PromptGitHubToken -and -not $ResyncDisableFlag) {
                     $sec = Read-Host -AsSecureString 'GitHub token for Jeeves resync (not echoed)'
                     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
                     try {

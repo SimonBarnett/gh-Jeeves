@@ -31,6 +31,9 @@ Copy `config/bobjeeves.example.json` → `config/bobjeeves.json` (or
 
 - `irc_host` / `irc_port` / `tls`
 - `nick`, `sasl_user`, `sasl_password_file` (path only — secret never in cmdline)
+- `password_file` with empty `sasl_user` → Ergo **server-password** auth (`AGENTIC_IRC_PASSWORD_FILE`)
+- `receiver_secret_file` → nssm `BOB_CALLBACK_SECRET_FILE` (LocalSystem X-Bob-Secret; FR #72)
+- `disable_resync` / `-ResyncDisable` / `-DisableResync` → `--no-resync` + `JEEVES_RESYNC_DISABLE=1`
 - `receiver_port` (default **19781**)
 - `jeeves_home` / `digest_home` (must differ)
 
