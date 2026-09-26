@@ -2,16 +2,15 @@
 name: jeeves-shop-protocol
 description: >
   Use this when wiring or checking the shop claim path in #{machine}: worker
-  !bored after 2 min idle, the bob-{machine} ear's addressed offer, worker
-  ACK/DONE, and what Jeeves records silently from those lines. Also use when a
-  worker pack, ear or watcher is being built and must match the wire grammar,
-  or /jeeves-shop-protocol.
+  !bored, Jeeves assign-on-!bored (FR #106), worker ACK/DONE, and what Jeeves
+  records on the digest webhook. Also use when a worker pack or watcher must
+  match the wire grammar, or /jeeves-shop-protocol.
 ---
 
 # jeeves-shop-protocol
 
-Wire contract for claims in each `#{machine}` shop. Jeeves owns the grammar and
-the ACK/DONE recording; the ear's `!bored` → offer code lives in agentic_irc.
+Wire contract for claims in each `#{machine}` shop. **Jeeves owns**
+`!bored` → assign (FR #106; ear `OFFER` retired) and ACK/DONE recording.
 
 Agentic control is an overlay: the token-less path must never depend on this skill.
 
@@ -19,55 +18,51 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 
 | Actor | Channels | Does | Never |
 |-------|----------|------|-------|
-| Jeeves | `#bobiverse` + every `#{machine}` | Announces GIT work on `#bobiverse` only; keeps the queue on the digest webhook; listens silently in shops for ACK/DONE | Replies in shops, handles `!bored`, makes offers |
-| bob-{machine} ear | its own `#{machine}` (+ `#bobiverse`) | Answers `!bored` with the top unaccepted job addressed to that nick; takes the ACK | Offers to a busy worker; stacks offers |
-| Worker `{machine}-<pid>` | its own `#{machine}` only | `!bored` after >2 min idle; `ACK`; does the task; `DONE` | Joins `#bobiverse` |
+| Jeeves | `#bobiverse` + every `#{machine}` | Announces GIT on `#bobiverse`; queue on digest webhook; on trusted `!bored` **assigns** one line; records ACK/DONE | Emit ear-style `OFFER`; LLM on token-less path |
+| bob-{machine} ear | its own `#{machine}` (+ `#bobiverse`) | Peer/digest ear duties | Claim/OFFER jobs (retired) |
+| Worker `{machine}-<pid>` | its own `#{machine}` only | `!bored` (monitor-owned for watch seats); `ACK`; work; `DONE` | Post `!bored` from the model; join `#bobiverse` (fleet workers) |
 
-Work reaches workers **only** as channel messages from the ear in `#{machine}`.
-No wake files, no console injection, no PMs.
+Work reaches workers as the Jeeves assign line in `#{machine}` after `!bored`.
 
 ## Flow
 
 ```mermaid
 flowchart TD
-  I[Worker idle > 2 min] --> B["!bored in #machine"]
-  B --> E[bob-machine ear]
-  E --> O[Offer top unaccepted job to that nick]
-  O --> A["Worker: ACK TYPE repo#n"]
-  A --> J1[Jeeves: accepted + busy + activity]
-  J1 --> D["Worker: DONE TYPE repo#n result url"]
+  I[Worker idle] --> B["!bored in #machine"]
+  B --> J[Jeeves assign nick: TYPE repo#n url]
+  J --> A["Worker: ACK TYPE repo#n"]
+  A --> J1[Jeeves: accepted + busy]
+  J1 --> D["Worker: DONE TYPE repo#n PASS|FAIL url"]
   D --> J2[Jeeves: done + idle + supersede]
   J2 --> I
 ```
 
-*Caption: the ear offers, the worker ACKs and DONEs in its own shop, and Jeeves silently turns those lines into webhook state.*
+*Caption: Jeeves assigns on !bored; the worker ACKs and DONEs; ear OFFER is retired.*
 
 ## Grammar
 
-- Idle (worker → own shop): `!bored`
-- Offer (ear): `<nick>: OFFER <FR|MRB|UAT> <owner/repo>#<n> <url>` — one open offer per worker.
-- Accept: `ACK <TYPE> <owner/repo>#<n>`
-- Complete: `DONE <TYPE> <owner/repo>#<n> <PR|PASS merged|FAIL fix#m> <url>`
-- Return: `NACK|GIVEUP <TYPE> <owner/repo>#<n>` → back to unaccepted, worker idle.
+- Idle (worker/monitor → own shop): `!bored`
+- Assign (Jeeves, FR #106): `<nick>: <FR|MRB|UAT> <owner/repo>#<n> <url>` — one open assign per worker
+- Accept: `ACK <TYPE> <owner/repo>#<n>` (outbox line starts with `ACK`)
+- Complete: `DONE <TYPE> <owner/repo>#<n> [PASS|FAIL] <url>` (nothing after URL; model never posts `!bored`)
+- Return: `NACK|GIVEUP <TYPE> <owner/repo>#<n>` → back to unaccepted, worker idle
 
 ## What Jeeves records
 
-Jeeves trusts only `{machine}-<pid>` nicks, and only in **their own**
-`#{machine}`. Lines from `bob-*`, humans or other channels are ignored.
+Jeeves trusts only `{machine}-{pid}` nicks, and only in **their own**
+`#{machine}`. Lines from `bob-*`, humans or other channels are ignored for claim.
 
-- **ACK** → fire the digest webhook: job **accepted**, worker **busy**, activity
-  `<MODE> <repo>#<n> <title>` (shown on the TipForm START tile).
-- **DONE** → job **completed**, activity cleared, worker **idle**, apply the
-  supersede rules (see `jeeves-queue`).
-- Worker QUIT / DONE timeout / GIVEUP → job back to unaccepted, worker idle.
+- **`!bored`** → assign next unaccepted (focus sort); one open offer/assign per seat
+- **ACK** → digest webhook: job **accepted**, worker **busy**
+- **DONE** → job **completed**, worker **idle**, supersede (`jeeves-queue`)
+- Worker QUIT / timeout / GIVEUP → job back to unaccepted, worker idle
 
 ## Checks
 
-1. Worker nick matches `{machine}-<pid>` and it sits only in `#{machine}`.
-2. After an ACK, the job is in `queue.accepted` and the worker shows busy with
-   the activity text on `GET https://{bob-host}/bob/v1/report`.
-3. After DONE, the worker is idle with no jobs and the queue is superseded.
-4. Jeeves said nothing in the shop.
+1. Worker nick matches `{machine}-{pid}` and it sits only in `#{machine}`.
+2. After `!bored`, shop shows `<nick>: <TYPE> <repo>#n <url>` from Jeeves (not `OFFER`).
+3. After ACK, job is in `queue.accepted` and worker busy on `GET …/bob/v1/report`.
+4. After DONE, worker idle and queue superseded.
 
-Related: `jeeves-worker-state`, `jeeves-queue`, `jeeves-irc-roles`; wire
-grammar in `docs/functional-spec.md`; gate #1.
+Related: `jeeves-worker-state`, `jeeves-queue`, `jeeves-irc-roles`; wire in
+`docs/functional-spec.md` and README (SoT).

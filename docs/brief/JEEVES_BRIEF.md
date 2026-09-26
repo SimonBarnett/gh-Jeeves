@@ -172,8 +172,8 @@ Seed skills (each is a seed FR with a test or lint that checks the skill exists 
   - `bored_gate` has a 120 s idle rule and only accepts worker nicks shaped `w-<short>-<pid>` in their own shop.
 - **`scripts/irc_agent.py --chair`: Jeeves.**
   - Joins `#bobiverse` plus every fleet shop (`bobreport.chair_channels()`: `#flamingo #marchhare #ionos #ce-priority-dev1`) and drains `chair-outbox.txt`.
-  - **Today the chair handles `!BORED`** in shop channels: `_maybe_git_claim` → `_git_bored` → `claim_top_http` (POST `op=git-claim`) → posts `repo task id`, `NAK !BORED wait|busy` or `no jobs` in the shop. **This violates CAST IRON 3** and must move to the bob-{machine} ear.
-  - `!ACCEPT` is a no-op. There is no ACK/DONE parsing and no `!list`.
+  - **(2026-09-25 snapshot)** legacy `agentic_irc` chair claimed via `!BORED` / `git-claim` in shops. **Superseded by FR #106:** gh-Jeeves assigns on trusted `!bored` (ear OFFER retired); ACK/DONE update the queue.
+  - Snapshot also lacked ACK/DONE parsing and `!list` — those land in gh-Jeeves (see README).
 - **Installers:**
   - `scripts/Install-BobChair.ps1` starts the chair with `--home ~\.agentic-irc-jeeves` and `BOB_DIGEST_HOME=~\.agentic-irc-bobiverse` (they must differ). It kills any prior `--chair` / `Jeeves`, clears a stale `agent.quit.request`, and reads the Ergo connect secret from the user profile (value redacted).
   - `scripts/Register-BobChairTask.ps1` registers scheduled task **`BobJeeves-chair`** (at logon plus a 1-minute repetition watchdog, IgnoreNew, as the chair user). The reason given: the DPAPI user-scope sealed identity and `icacls` fail under LocalSystem, so an NSSM service crash-loops.

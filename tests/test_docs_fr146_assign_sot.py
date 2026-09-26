@@ -65,3 +65,13 @@ def test_functional_spec_says_assign():
     text = SPEC.read_text(encoding="utf-8")
     assert "Jeeves owns `!bored` → assign" in text or "Jeeves assign" in text
     assert "ear `OFFER` retired" in text or "ear OFFER" in text.lower() or "OFFER` retired" in text
+
+
+def test_shop_protocol_skill_assigns_not_ear_offer():
+    skill = ROOT / "skills" / "jeeves-shop-protocol" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    assert "FR #106" in text or "assign" in text.lower()
+    assert "Jeeves owns" in text or "Jeeves assign" in text
+    assert "ear `OFFER` retired" in text or "OFFER` retired" in text or "OFFER path retired" in text
+    assert "Answers `!bored` with the top unaccepted" not in text
+    assert re.search(r"ear'?s\s+addressed\s+offer", text, re.I) is None
