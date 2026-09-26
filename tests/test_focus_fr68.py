@@ -177,6 +177,8 @@ def test_digest_exposes_focus(tmp_path: Path):
     assert isinstance(snap.get("focus"), list)
     assert snap["focus"][0]["repo"] == "o/r"
     assert snap["focus"][0]["priority"] == 5
+    # FR #154: additive boolean; default off when never toggled
+    assert snap.get("focus_strict") is False
 
 
 def test_non_simon_refused(tmp_path: Path):

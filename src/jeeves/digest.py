@@ -629,12 +629,15 @@ def public_digest_snapshot(home: Path, *, queue_home: Path | None = None) -> dic
     except Exception:
         pass
     # FR #68: additive focus list (trays may ignore unknown keys)
+    # FR #154: additive focus_strict boolean from focus.json (does not alter focus list)
     try:
-        from .focus import focus_public_list
+        from .focus import focus_public_list, is_strict_focus
 
         doc["focus"] = focus_public_list(qh)
+        doc["focus_strict"] = bool(is_strict_focus(qh))
     except Exception:
         doc.setdefault("focus", [])
+        doc.setdefault("focus_strict", False)
     # version stamp optional
     stamp = Path(home) / "jeeves_version.json"
     if stamp.is_file():

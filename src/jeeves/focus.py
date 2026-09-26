@@ -794,7 +794,11 @@ def is_unfocus_cmd(body: str) -> bool:
 
 
 def focus_public_list(home: Path) -> list[dict[str, Any]]:
-    """Digest-safe list: items first, then repos."""
+    """Digest-safe list: items first, then repos.
+
+    Strict mode is exposed separately as digest ``focus_strict`` (FR #154) so
+    existing list consumers keep the same shape.
+    """
     out: list[dict[str, Any]] = []
     for key, rk, lab in list_item_focus_entries(home):
         out.append({"item": key, "rank": rk, "label": lab, "kind": "item"})
