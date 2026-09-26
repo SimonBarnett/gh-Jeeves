@@ -214,3 +214,63 @@ def test_accept_job_queue_workers_include_title(tmp_path: Path):
     assert w["kind"] == "FR"
     assert w["ref"] == "SimonBarnett/gh-Jeeves#161"
     assert w["title"] == "Titled FR"
+
+
+def test_ack_uat_kind_and_no_pid_ghost(tmp_path: Path):
+    """Hostile: UAT kind is first-class; FR #162 forbids digit twin keys."""
+    home = tmp_path / "d"
+    home.mkdir()
+    nick = "ionos-12916"
+    apply_report(
+        home,
+        {
+            "op": "queue_accept",
+            "nick": nick,
+            "repo": "SimonBarnett/gh-Jeeves",
+            "task": "UAT",
+            "id": "77",
+            "title": "UAT stamp board",
+            "accepted_row": {
+                "repo": "SimonBarnett/gh-Jeeves",
+                "task": "UAT",
+                "id": "#77",
+                "line": "UAT stamp board",
+            },
+        },
+    )
+    doc = load_digest(home)
+    top = doc["workers"][nick]
+    assert top["kind"] == "UAT"
+    assert top["id"] == "#77"
+    assert top["ref"] == "SimonBarnett/gh-Jeeves#77"
+    mw = doc["machines"]["ionos"]["workers"]
+    assert nick in mw
+    assert "12916" not in mw
+    assert mw[nick]["kind"] == "UAT"
+
+
+def test_done_then_snapshot_stays_idle_without_title(tmp_path: Path):
+    """Hostile: public snapshot after DONE must not rehydrate title/ref."""
+    home = tmp_path / "d"
+    home.mkdir()
+    nick = "flamingo-55"
+    apply_report(
+        home,
+        {
+            "op": "worker_state",
+            "nick": nick,
+            "state": "busy",
+            "repo": "o/r",
+            "task": "MRB",
+            "id": "#9",
+            "title": "Board",
+        },
+    )
+    apply_report(home, {"op": "worker_state", "nick": nick, "state": "idle", "job": None})
+    snap = public_digest_snapshot(home)
+    w = snap["workers"][nick]
+    assert w["state"] == "idle"
+    assert w.get("title") in (None, "")
+    assert w.get("ref") in (None, "")
+    assert w.get("job") is None
+    assert "55" not in (snap["machines"]["flamingo"].get("workers") or {})
