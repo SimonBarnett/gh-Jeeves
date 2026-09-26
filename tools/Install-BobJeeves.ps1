@@ -22,7 +22,12 @@ param(
     [switch]$DryRun,
     [switch]$Apply,
     [switch]$Json,
-    [switch]$Production
+    [switch]$Production,
+    # FR #70: disable GitHub resync (JEEVES_RESYNC_DISABLE=1) when no token yet
+    [switch]$ResyncDisable,
+    # FR #70: securely prompt for GitHub token; store as github.token (ACL service account)
+    [switch]$PromptGitHubToken,
+    [string]$GitHubTokenFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -170,6 +175,9 @@ $plan = [ordered]@{
     recovery_restart     = $true
     service_cmdline      = $serviceCmdline
     python_args          = @($pyArgs)
+    resync_disable       = [bool]$ResyncDisable
+    github_token_file    = $null
+    prompt_github_token  = [bool]$PromptGitHubToken
     steps                = New-Object System.Collections.ArrayList
     forbidden            = @(
         'Install-BobIrcd.ps1',
@@ -245,6 +253,20 @@ if ($svc) {
 [void]$plan.steps.Add('start= auto (never Disabled) - FR #7 / K6')
 [void]$plan.steps.Add('sc.exe failure BobJeeves reset= 86400 actions= restart/60000/restart/60000/restart/60000')
 [void]$plan.steps.Add('Disable-ScheduledTask BobJeeves-chair after service registered (Apply only)')
+
+# FR #70: resync token / disable (never echo token; never pass as CLI arg)
+if (-not $GitHubTokenFile) {
+    $GitHubTokenFile = Join-Path $JeevesHome 'github.token'
+}
+$plan.github_token_file = $GitHubTokenFile
+if ($ResyncDisable) {
+    [void]$plan.steps.Add('AppEnvironmentExtra JEEVES_RESYNC_DISABLE=1 (FR #70)')
+} else {
+    [void]$plan.steps.Add(('JEEVES_GITHUB_TOKEN_FILE={0} (token never in cmdline)' -f $GitHubTokenFile))
+}
+if ($PromptGitHubToken) {
+    [void]$plan.steps.Add('PromptGitHubToken: Read-Host -AsSecureString writes github.token ACL SYSTEM+Administrators only')
+}
 
 $task = Get-ScheduledTask -TaskName 'BobJeeves-chair' -ErrorAction SilentlyContinue
 if ($task) {
@@ -323,6 +345,47 @@ if ($Apply) {
                 if ($SaslUser) { $envExtra += "AGENTIC_IRC_SASL_USER=$SaslUser" }
                 if ($SaslPasswordFile) { $envExtra += "AGENTIC_IRC_SASL_PASSWORD_FILE=$SaslPasswordFile" }
                 if ($PasswordFile) { $envExtra += "AGENTIC_IRC_PASSWORD_FILE=$PasswordFile" }
+                # FR #70: resync credential (file path only) or explicit disable
+                if ($ResyncDisable) {
+                    $envExtra += 'JEEVES_RESYNC_DISABLE=1'
+                } else {
+                    $envExtra += ("JEEVES_GITHUB_TOKEN_FILE=$GitHubTokenFile")
+                }
+                if ($PromptGitHubToken -and -not $ResyncDisable) {
+                    $sec = Read-Host -AsSecureString 'GitHub token for Jeeves resync (not echoed)'
+                    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+                    try {
+                        $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+                    } finally {
+                        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) | Out-Null
+                    }
+                    if ([string]::IsNullOrWhiteSpace($plain)) {
+                        [void]$plan.warnings.Add('PromptGitHubToken: empty token; set JEEVES_RESYNC_DISABLE=1 or re-run prompt')
+                    } else {
+                        $tokDir = Split-Path -Parent $GitHubTokenFile
+                        if ($tokDir -and -not (Test-Path -LiteralPath $tokDir)) {
+                            New-Item -ItemType Directory -Force -Path $tokDir | Out-Null
+                        }
+                        Set-Content -LiteralPath $GitHubTokenFile -Value $plain.Trim() -Encoding ascii -NoNewline
+                        # ACL: SYSTEM + Administrators only (service account readable)
+                        try {
+                            $acl = Get-Acl -LiteralPath $GitHubTokenFile
+                            $acl.SetAccessRuleProtection($true, $false)
+                            $acl.Access | ForEach-Object { [void]$acl.RemoveAccessRule($_) }
+                            foreach ($id in @('NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators')) {
+                                $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                                    $id, 'Read,Write', 'Allow'
+                                )
+                                $acl.AddAccessRule($rule)
+                            }
+                            Set-Acl -LiteralPath $GitHubTokenFile -AclObject $acl
+                            [void]$plan.steps.Add(('Wrote {0} with SYSTEM+Administrators ACL' -f $GitHubTokenFile))
+                        } catch {
+                            [void]$plan.warnings.Add(('ACL harden github.token failed: {0}' -f $_.Exception.Message))
+                        }
+                    }
+                    $plain = $null
+                }
                 & $plan.nssm set $ServiceName AppEnvironmentExtra $envExtra | Out-Null
                 # FR #7 / K6: disable legacy scheduled task so service owns the chair
                 $legacyTask = Get-ScheduledTask -TaskName 'BobJeeves-chair' -ErrorAction SilentlyContinue

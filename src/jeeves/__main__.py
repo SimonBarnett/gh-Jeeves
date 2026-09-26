@@ -118,6 +118,34 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def wire_resync_scheduler(
+    home: Path,
+    *,
+    interval_s: float = 15 * 60,
+    jeeves_home: Path | None = None,
+) -> tuple[object | None, str | None]:
+    """FR #70 / #49: build resync or return (None, warn) — never fatal for missing token.
+
+    Returns ``(scheduler, warning_message)``. Warning is set when resync is
+    skipped because the credential is missing; caller logs it once and continues.
+    """
+    from .resync import ResyncConfigError, build_resync_scheduler, resync_disabled
+
+    if resync_disabled():
+        return None, None
+    try:
+        sched = build_resync_scheduler(
+            home,
+            interval_s=float(interval_s),
+            require_token=True,
+            jeeves_home=jeeves_home,
+        )
+        return sched, None
+    except ResyncConfigError as exc:
+        # Token-less CAST IRON: announce/queue/receiver must keep running.
+        return None, f"WARN resync disabled: {exc} (report once; chair keeps running)"
+
+
 def dry_run_plan(args: argparse.Namespace) -> dict:
     from .prod_receiver import digest_home_from_env, jeeves_home_from_env
 
@@ -269,7 +297,8 @@ def main(argv: list[str] | None = None) -> int:
         chair_queue_home = dh
         host = args.host
         port = int(args.port)
-        if port <= 0 and not args.tls:
+        no_irc = os.environ.get("JEEVES_CHAIR_NO_IRC") == "1"
+        if port <= 0 and not args.tls and not no_irc:
             print(
                 "ERROR chair needs --port (local ircd) or production Ergo :6697 with --tls",
                 flush=True,
@@ -278,29 +307,20 @@ def main(argv: list[str] | None = None) -> int:
                 receiver.stop()
             return 2
 
-        # FR #49: wire ResyncScheduler on start so !list is populated
-        from .resync import ResyncConfigError, build_resync_scheduler, resync_disabled
-
+        # FR #49 / #70: wire ResyncScheduler; missing token → warn once, keep running
         if args.no_resync:
             os.environ["JEEVES_RESYNC_DISABLE"] = "1"
 
-        sched = None
-        if not resync_disabled():
-            try:
-                sched = build_resync_scheduler(
-                    chair_queue_home,
-                    interval_s=float(args.resync_interval),
-                    require_token=True,
-                    jeeves_home=jh,
-                )
-            except ResyncConfigError as exc:
-                print(f"ERROR resync config: {exc}", flush=True)
-                if receiver:
-                    receiver.stop()
-                return 2
+        sched, resync_warn = wire_resync_scheduler(
+            chair_queue_home,
+            interval_s=float(args.resync_interval),
+            jeeves_home=jh,
+        )
+        if resync_warn:
+            print(resync_warn, flush=True)
 
         # For unit/service smoke without IRC, allow JEEVES_CHAIR_NO_IRC=1
-        if os.environ.get("JEEVES_CHAIR_NO_IRC") == "1":
+        if no_irc:
             print("INFO chair no-irc smoke mode digest_home=" + str(dh), flush=True)
             if sched is not None:
                 # still run start resync so queue is warm before IRC-less hold
@@ -309,7 +329,15 @@ def main(argv: list[str] | None = None) -> int:
                     f"INFO resync-on-start runs={sched.runs} interval_s={args.resync_interval}",
                     flush=True,
                 )
+            smoke_s = float(os.environ.get("JEEVES_CHAIR_SMOKE_SECONDS") or "0")
             try:
+                if smoke_s > 0:
+                    time.sleep(smoke_s)
+                    if sched is not None:
+                        sched.stop()
+                    if receiver is not None:
+                        receiver.stop()
+                    return 0
                 while True:
                     time.sleep(3600)
             except KeyboardInterrupt:
