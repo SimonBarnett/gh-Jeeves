@@ -40,7 +40,7 @@ flowchart LR
 
 **Install (FR #48):** `config/bobjeeves.example.json` drives `Install-BobJeeves.ps1` — full `--host/--port/--tls` cmdline, receiver **19781**, **no BobIrcd dependency**, topology **combined** chair+receiver.
 
-**Modes (FR #52):** authenticated `bob-*` get `+h` (`+o` in own shop); authenticated `simon` from a fleet host gets `+o`. Trust is services account (SASL), never nick alone. No channel text.
+**Modes (FR #52 / #160):** authenticated `bob-*` get `+h` (`+o` in own shop); authenticated `simon` from a fleet host gets `+o`. Trust is services account (SASL), never nick alone. No channel text. Ergo has no runtime SAIDENTIFY/auto-OPER for Simon — Halloy needs SASL/PASS/CERTFP; see `docs/simon-auto-oper-runtime-fr160.md`.
 
 **Channel join (FR #55):** on connect and reconnect Jeeves sends LIST and JOINs every channel returned (skips 0/+ local and config denylist). Periodic re-LIST (default 60s) joins newly created shops. KICK rejoins with backoff; ban/invite-only logs once and stops. Static shops is optional seed only.
 
