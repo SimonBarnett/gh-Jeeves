@@ -150,7 +150,9 @@ def test_merge_ear_machine_report_and_get_digest(tmp_path: Path):
         assert fl["online"] is True
         assert fl["lastSeen"] == "2026-09-25T12:00:00Z"
         assert fl["pcent"]["cursor-models"] == 42
-        assert "46804" in fl["workers"]
+        # FR #162: ear pid promote to nick key (no digit ghost)
+        assert "flamingo-46804" in fl["workers"]
+        assert "46804" not in fl["workers"]
         assert isinstance(doc.get("cursor_pools"), list)
         assert len(doc["cursor_pools"]) >= 1
         # GET without secret still works
