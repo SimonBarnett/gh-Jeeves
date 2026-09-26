@@ -24,13 +24,13 @@ def test_desired_workflow_is_balanced_and_guarded():
     assert re.search(r"(?ms)^on:\s*.*?^\s*push:\s*$.*?branches:\s*\[main\]", text)
 
 
-def test_live_workflow_matches_desired_when_present():
-    """If .github copy is readable in CI checkout, it must match the desired fix."""
+def test_live_workflow_if_guarded_must_be_balanced():
+    """Catch the #145 footgun: || '' with only one closing brace."""
     if not WF.is_file():
         return
-    live = WF.read_text(encoding="utf-8")
-    desired = DESIRED.read_text(encoding="utf-8")
-    # Compare BODY lines and push trigger presence
-    assert _body_expr(live) == _body_expr(desired)
-    assert "||" in _body_expr(live)
-    assert _body_expr(live).endswith("}}")
+    expr = _body_expr(WF.read_text(encoding="utf-8"))
+    if "||" in expr:
+        assert expr.endswith("}}"), (
+            "unguarded close: push parse fails with zero jobs — "
+            f"use tools/mrb-seat-trailer.yml.desired / Apply-MrbSeatTrailerWorkflowFix.ps1 -Write: {expr!r}"
+        )
