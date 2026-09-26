@@ -11,6 +11,11 @@ description: >
 Seed FR: #21. Busy/idle comes from shop ACK/DONE that Jeeves records — never
 from how a seat's console looks (hidden runs look idle while working).
 
+## Overlay
+
+**Agentic control is an overlay.** The token-less path (brief section 0 / issue #1)
+must **never** depend on this skill or an LLM. Scripts own ACK/DONE → webhook.
+
 **K12 / FR #13:** TipForm START tiles read `machines.<id>.working_on` (and
 pid `workers.*.working_on`) that Jeeves sets on ACK and clears on DONE.
 AgentMonitor hidden `-p` wakes (AgentMonitor #90) may leave the visible TUI
@@ -20,11 +25,9 @@ looking idle — the webhook/TipForm is the operator busy signal.
 as `WORKING: FR owner/repo#n` before work) so chat history shows the job even
 when the TUI does not reload.
 
-Agentic control is an overlay: the token-less path must never depend on this skill.
-
 ## Source of truth
 
-`GET https://{bob-host}/bob/v1/report` (digest webhook):
+`GET https://irc.ntsa.uk/bob/v1/report` (digest webhook):
 
 - `machines.<id>`: `nick`, `online`, `lastSeen`, `jobs`, `running`, `queued`,
   `working_on` (**TipForm busy text**), `workers{pid:{working_on, agent, model}}`.
@@ -51,6 +54,20 @@ flowchart LR
 
 *Caption: Jeeves is the single deterministic writer of worker busy/idle and activity.*
 
+## Commands
+
+CI-safe **dry-run** (skill lint + isolated ACK→busy / DONE→idle TipForm demo;
+never mutates the live digest):
+
+```powershell
+python -m jeeves.worker_state_tool --dry-run --json
+python -m jeeves worker-state --dry-run --json
+```
+
+Optional read-only live counts: `--digest-home $env:BOB_DIGEST_HOME`.
+
+Exit codes: `0` ok, `2` skill incomplete.
+
 ## Rules
 
 - Idle seats must show **no jobs**: empty `jobs`, `running=0`, `queued=0`,
@@ -63,14 +80,18 @@ flowchart LR
 
 ## Diagnose
 
-1. **Accepted empty after ACK:** check the nick is `{machine}-<pid>` and the
-   ACK was in its own `#{machine}`; check the grammar parses; check the webhook
-   POST was accepted (Jeeves log).
-2. **Stuck accepted:** worker gone (no live nick) → should return to
-   unaccepted; if not, run a resync (`jeeves-queue`, dry-run first).
-3. **Stale START tile:** confirm the digest shows empty `jobs`; if the digest
-   is right, the tile's cache/fingerprint is stale (TipForm, owned elsewhere) —
-   republish rather than editing the digest by hand.
-4. **Idle but working:** the worker skipped ACK; fix the worker pack, not Jeeves.
+1. **Accepted empty after ACK:** nick `{machine}-<pid>` in own `#{machine}`;
+   grammar; webhook POST (Jeeves log).
+2. **Stuck accepted:** worker gone → return to unaccepted; else `jeeves-queue`
+   dry-run / resync.
+3. **Stale START tile:** digest empty `working_on` / jobs but TipForm stale —
+   TipForm cache (owned elsewhere); republish.
+4. **Idle but working:** worker skipped ACK; fix worker pack, not Jeeves.
+
+## Tests
+
+```text
+pytest -q tests/test_skill_worker_state_fr21.py tests/test_worker_busy_tipform_k12_fr13.py
+```
 
 Related: `jeeves-shop-protocol`, `jeeves-queue`, `jeeves-health`.
