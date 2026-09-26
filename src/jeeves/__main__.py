@@ -25,8 +25,8 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
         "mode",
         nargs="?",
         default="all",
-        choices=("chair", "receiver", "all", "dry-run", "health"),
-        help="Process role (default all); health = report-only IRC/service probe (FR #8)",
+        choices=("chair", "receiver", "all", "dry-run", "health", "queue"),
+        help="Process role (default all); health/queue = report-only tools (FR #8 / #19)",
     )
     p.add_argument("--nick", default=os.environ.get("AGENTIC_IRC_CHAIR_NICK") or "Jeeves")
     p.add_argument("--host", default=os.environ.get("AGENTIC_IRC_HOST") or "127.0.0.1")
@@ -140,11 +140,15 @@ def dry_run_plan(args: argparse.Namespace) -> dict:
 def main(argv: list[str] | None = None) -> int:
     hydrate_secrets_from_files()
     raw = list(argv if argv is not None else sys.argv[1:])
-    # FR #18: hand health subcommand (+ flags) to jeeves.health intact.
+    # FR #18 / #19: hand health|queue subcommand (+ flags) to tool modules intact.
     if raw and raw[0] == "health":
         from . import health as health_mod
 
         return health_mod.main(raw[1:])
+    if raw and raw[0] == "queue":
+        from . import queue_tool as queue_tool_mod
+
+        return queue_tool_mod.main(raw[1:])
     args = _parse(argv)
     if args.mode == "dry-run":
         import json
