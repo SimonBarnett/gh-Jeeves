@@ -2,7 +2,7 @@
 
 Agent-controllable surface for operating, diagnosing, and changing Jeeves.
 
-**Agentic control is an overlay.** The section 0 token-less path (GitHub → announce → queue → !bored → offer → ACK → DONE → supersede) must **never** depend on a skill or an LLM. Skills help humans and agents; scripts own the gate (#1).
+**Agentic control is an overlay.** The section 0 token-less path (GitHub → announce → queue → !bored → **Jeeves assign** → ACK → DONE → supersede) must **never** depend on a skill or an LLM. Skills help humans and agents; scripts own the gate (#1 / FR #106).
 
 | Skill | Purpose | Seed / refs |
 |-------|---------|-------------|
@@ -14,7 +14,7 @@ Agent-controllable surface for operating, diagnosing, and changing Jeeves.
 | [jeeves-worker-state](jeeves-worker-state/SKILL.md) | ACK/DONE → accepted/busy/activity, done/idle; stuck accepted | #21 |
 | [jeeves-release](jeeves-release/SKILL.md) | Tag, deploy, G2, roll back | #22 |
 | [jeeves-token-less-gate](jeeves-token-less-gate/SKILL.md) | Run G1 local E2E and G2 live smoke | #23, #1 |
-| [jeeves-shop-protocol](jeeves-shop-protocol/SKILL.md) | `#{machine}` wire contract: `!bored` → ear offer → ACK → DONE; what Jeeves records | #1 |
+| [jeeves-shop-protocol](jeeves-shop-protocol/SKILL.md) | `#{machine}` wire: `!bored` → Jeeves assign → ACK → DONE | #1, #106, #146 |
 | [jeeves-task-modes](jeeves-task-modes/SKILL.md) | FR / MRB / UAT contract; MRB tests-first, docs PR on PASS, fix PR on FAIL | #1 |
 | [jeeves-irc-roles](jeeves-irc-roles/SKILL.md) | Nicks, channels, secrets and token-free listening | — |
 
