@@ -187,7 +187,7 @@ def coerce_machine(mid: str, raw: Any) -> dict[str, Any]:
     )
     if isinstance(raw.get("pcent"), dict):
         base["pcent"] = raw["pcent"]
-    for k in ("running", "queued", "uptime_since", "fuel", "agent", "model"):
+    for k in ("running", "queued", "uptime_since", "fuel", "fuel_mode", "agent", "model"):
         if k in raw and raw[k] is not None:
             base[k] = raw[k]
     try:
@@ -572,7 +572,7 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
                 for wk, wv in incoming_w.items():
                     merged_w[wk] = wv
                 ent["workers"] = merged_w
-            for k in ("running", "queued", "fuel", "uptime_since", "nick", "shop"):
+            for k in ("running", "queued", "fuel", "fuel_mode", "uptime_since", "nick", "shop"):
                 if k in payload and payload[k] is not None:
                     ent[k] = payload[k]
             # nested worker update by pid
