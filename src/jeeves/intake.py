@@ -265,6 +265,9 @@ def _labels_for(norm: dict, *, quarantine: bool) -> list[str]:
         labels.append("feature-request")
     if kind in ("skill", "harvest"):
         labels.append("skill")
+    if kind in ("issue", "fr"):
+        # FR #151: agent/intake proposals await human vision fit (MRB #1)
+        labels.append("needs-mrb1")
     if quarantine:
         labels.append("via-intake-untriaged")
     return labels

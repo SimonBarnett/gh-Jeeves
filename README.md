@@ -51,9 +51,10 @@ flowchart LR
 5. Deterministic scripts-only path (works during token outage / Sand empty).  
 6. Supersede: FR↔MRB↔UAT per GitHub events (see diagrams).  
 7. MRB PASS closes FR; FAIL one fix PR, FR stays open; only Bob stamps UAT. Self-MRB only when one live seat.
-   **FR #92:** PR body needs `Seat: {nick}`. Reviewing seat posts required check **`mrb/verdict`** via
+   **FR #151:** agent-submitted issues need **MRB #1** (Simon vision fit: `needs-mrb1` → `mrb1-pass`) before engineering.
+   **FR #92 / MRB #2:** PR body needs `Seat: {nick}`. Reviewing seat posts required check **`mrb/verdict`** via
    `tools/post_mrb_verdict.py` (full `pytest tests/`, duration ≥ 10 min, reviewer ≠ author).
-   See `docs/mrb-enforcement.md`. Simon may admin-override.  
+   See `docs/mrb-gates.md` and `docs/mrb-enforcement.md`. Simon may admin-override.  
 8. `!list` in channel or PM → queue by PM only (`all`/`repo` filters; no silent cap).  
 9. Own Windows service; never touch Ergo/BobIrcd.  
 10. Busy/idle from ACK/DONE, not from TUI appearance.  

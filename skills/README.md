@@ -16,6 +16,7 @@ Agent-controllable surface for operating, diagnosing, and changing Jeeves.
 | [jeeves-token-less-gate](jeeves-token-less-gate/SKILL.md) | Run G1 local E2E and G2 live smoke | #23, #1 |
 | [jeeves-shop-protocol](jeeves-shop-protocol/SKILL.md) | `#{machine}` wire: `!bored` → Jeeves assign → ACK → DONE | #1, #106, #146 |
 | [jeeves-task-modes](jeeves-task-modes/SKILL.md) | FR / MRB / UAT contract; MRB tests-first, docs PR on PASS, fix PR on FAIL | #1 |
+| [jeeves-mrb-gates](jeeves-mrb-gates/SKILL.md) | MRB #1 vision fit (issues) + MRB #2 implementation (PRs) | #151, #92 |
 | [jeeves-irc-roles](jeeves-irc-roles/SKILL.md) | Nicks, channels, secrets and token-free listening | — |
 
 Foundation twin: `.grok/skills/harvest-agent-skills` → `skills/harvest`.

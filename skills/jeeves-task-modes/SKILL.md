@@ -25,6 +25,9 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 Prefer a different worker for MRB than the PR author when 2+ are free; with one
 free seat it may continue into MRB.
 
+Do **not** open an FR implementation PR for an issue still labeled `needs-mrb1`
+or `mrb1-reject` (FR #151 MRB #1 fit gate — see `jeeves-mrb-gates`).
+
 ## MRB
 
 ```mermaid
