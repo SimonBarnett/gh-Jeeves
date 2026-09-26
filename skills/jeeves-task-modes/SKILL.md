@@ -44,7 +44,10 @@ flowchart TD
   anything is stale, open **one** docs PR and merge it with the original. Close
   the source FR. The merge after PASS makes the queue item a **UAT**.
 - **FAIL:** open **one** fix PR and merge both. The source FR stays open, so
-  the queue restores the **FR**. The fix PR must not say `Closes #n` for the FR.
+  the queue restores the **FR** (`DONE MRB … FAIL` → `mrb_fail_hold`). If
+  GitHub still auto-closes the issue because the implementer PR said
+  `Closes #n`, Jeeves **keeps the FR** on the CLOSE/UAT path (K15 / FR #16).
+  The fix PR must not say `Closes #n` for the FR.
 - Never stamp UAT from an MRB worker.
 
 ## Worker hygiene
