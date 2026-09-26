@@ -64,7 +64,7 @@ Evidence for each is in sections 4, 11, 12 and 18. Each FR needs a failing test 
 | K12 | **Worker sessions look idle:** FROM payloads run as hidden `agent.exe -r <session> -p` processes, not in the visible seat | section 11 | Busy state on the webhook/TipForm from ACK/DONE; the worker pack echoes its task in the seat. **FR #13** sets `machines.<id>.working_on` from ACK/DONE (`tests/test_worker_busy_tipform_k12_fr13.py`); seat echo + TUI visibility: AgentMonitor #90. |
 | K13 | **IRC reconnect storm:** irc_agent `PART :recv idle`, then the monitor relaunches every few seconds, then Ergo's "too many connections" throttle | section 11, section 5.9 | Reconnect in place with exponential backoff on the throttle ERROR (agentic_irc #210 area); Jeeves and the ears get the same. **FR #14** / #108: `TlsIrcClient.ensure_connected` retries forever with cap ~30s; success clears storm counters (`tests/test_reconnect_k13_fr14.py`). |
 | K14 | **The receiver's secret filter rejects payloads** containing certain strings, so issues with them are never announced | agentic_irc #206 | Scan only the secret-bearing fields; test with this brief's text. |
-| K15 | **"closes #N" in PR bodies closes the FR even on MRB FAIL** | gap 7 | The queue treats an issue closed by a merge whose MRB failed as still open (or the worker pack forbids closing keywords). |
+| K15 | **"closes #N" in PR bodies closes the FR even on MRB FAIL** | gap 7 | The queue treats an issue closed by a merge whose MRB failed as still open (or the worker pack forbids closing keywords). **FR #16**: `DONE MRB … FAIL` restores FR + `mrb_fail_hold`; CLOSE/UAT after FAIL keep FR (`tests/test_mrb_fail_closes_k15_fr16.py`). |
 
 
 ## 0.2 Skills directory: Jeeves is agent-controllable (required)

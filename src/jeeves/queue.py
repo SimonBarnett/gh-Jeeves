@@ -57,7 +57,140 @@ def _utc_now() -> str:
 
 
 def empty_queue() -> dict[str, Any]:
-    return {"v": QUEUE_VERSION, "unaccepted": [], "accepted": [], "done": [], "workers": {}}
+    return {
+        "v": QUEUE_VERSION,
+        "unaccepted": [],
+        "accepted": [],
+        "done": [],
+        "workers": {},
+        # K15 / FR #16: issue ids whose MRB FAILed — CLOSE must restore FR, not drop.
+        "mrb_fail_hold": [],
+    }
+
+
+def is_mrb_fail_result(result: str) -> bool:
+    """True for DONE … FAIL / FAIL fix#m (MRB hostile FAIL)."""
+    s = str(result or "").strip().lower()
+    if not s:
+        return False
+    return s == "fail" or s.startswith("fail") or "fail" in s.split()
+
+
+def _hold_key(repo: str, ident: str) -> str:
+    return f"{repo}|{_norm_ident(ident)}"
+
+
+def _add_mrb_fail_hold(doc: dict[str, Any], repo: str, idents: tuple[str, ...]) -> None:
+    hold = doc.setdefault("mrb_fail_hold", [])
+    if not isinstance(hold, list):
+        hold = []
+        doc["mrb_fail_hold"] = hold
+    for ident in idents:
+        key = _hold_key(repo, ident)
+        if key not in hold:
+            hold.append(key)
+
+
+def _pop_mrb_fail_hold(doc: dict[str, Any], repo: str, ident: str) -> bool:
+    hold = doc.get("mrb_fail_hold")
+    if not isinstance(hold, list):
+        return False
+    key = _hold_key(repo, ident)
+    if key not in hold:
+        return False
+    doc["mrb_fail_hold"] = [h for h in hold if h != key]
+    return True
+
+
+def _has_mrb_fail_hold(doc: dict[str, Any], repo: str, ident: str) -> bool:
+    hold = doc.get("mrb_fail_hold")
+    if not isinstance(hold, list):
+        return False
+    return _hold_key(repo, ident) in hold
+
+
+def _done_has_mrb_fail_for_pr(doc: dict[str, Any], repo: str, pr_id: str) -> bool:
+    """True if a DONE MRB FAIL was recorded for this PR (K15)."""
+    pr = _norm_ident(pr_id)
+    for row in doc.get("done") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("repo") or "") != repo:
+            continue
+        if str(row.get("task") or "").upper() != "MRB":
+            continue
+        rid = _norm_ident(str(row.get("id") or ""))
+        rpr = _norm_ident(str(row.get("pr_id") or ""))
+        if rid != pr and rpr != pr:
+            continue
+        if is_mrb_fail_result(str(row.get("result") or "")):
+            return True
+    return False
+
+
+def _fr_ids_from_mrb_row(row: dict[str, Any]) -> tuple[str, ...]:
+    refs = row.get("refs")
+    if isinstance(refs, (list, tuple)) and refs:
+        return tuple(_norm_ident(str(x)) for x in refs if x)
+    return extract_closes_issue_ids(str(row.get("line") or ""))
+
+
+def _fr_linked_to_failed_mrb(doc: dict[str, Any], repo: str, fr_id: str) -> bool:
+    """True if a DONE MRB FAIL row links this issue (Closes #n)."""
+    want = _norm_ident(fr_id)
+    for row in doc.get("done") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("repo") or "") != repo:
+            continue
+        if str(row.get("task") or "").upper() != "MRB":
+            continue
+        if not is_mrb_fail_result(str(row.get("result") or "")):
+            continue
+        if want in _fr_ids_from_mrb_row(row):
+            return True
+    return False
+
+
+def _restore_frs_after_mrb_fail(
+    doc: dict[str, Any],
+    *,
+    repo: str,
+    pr_id: str,
+    fr_ids: tuple[str, ...],
+    line: str = "",
+    url: str = "",
+) -> None:
+    """Drop MRB for pr_id, hold + enqueue linked FRs (K15 / #207 MRB FAIL row)."""
+    pr = _norm_ident(pr_id)
+    _remove_tasks_for_ids(doc, repo, (pr,), {"MRB"})
+    _remove_matching(
+        doc["accepted"],
+        lambda r: str(r.get("repo")) == repo
+        and str(r.get("task") or "").upper() == "MRB"
+        and (
+            _norm_ident(str(r.get("id") or "")) == pr
+            or _norm_ident(str(r.get("pr_id") or "")) == pr
+        ),
+    )
+    for fr in fr_ids:
+        fr_id = _norm_ident(fr)
+        if not fr_id:
+            continue
+        _add_mrb_fail_hold(doc, repo, (fr_id,))
+        _remove_tasks_for_ids(doc, repo, (fr_id,), {"UAT", "PR"})
+        _append_unaccepted(
+            doc,
+            Claim(
+                repo=repo,
+                task="FR",
+                id=fr_id,
+                event="mrb_fail",
+                action="restore",
+                line=line or f"FR {fr_id} after MRB FAIL",
+                url=url,
+            ),
+        )
 
 
 def queue_path(home: Path) -> Path:
@@ -96,6 +229,8 @@ def load_queue(home: Path) -> dict[str, Any]:
             doc[k] = []
     if not isinstance(doc.get("workers"), dict):
         doc["workers"] = {}
+    if not isinstance(doc.get("mrb_fail_hold"), list):
+        doc["mrb_fail_hold"] = []
     if _migrate_legacy_pr_tasks(doc):
         try:
             save_queue(home, doc)
@@ -325,6 +460,24 @@ def apply_queue_event(home: Path, claim: Claim) -> str:
     links = _linked_ids(claim)
 
     if task == "CLOSE":
+        # K15 / FR #16: issue closed after MRB FAIL (Closes #N on merge) → keep FR open.
+        if _has_mrb_fail_hold(doc, repo, ident) or _fr_linked_to_failed_mrb(doc, repo, ident):
+            _remove_tasks_for_ids(doc, repo, (ident,), {"MRB", "UAT", "PR", "FIX"})
+            _pop_mrb_fail_hold(doc, repo, ident)
+            _append_unaccepted(
+                doc,
+                Claim(
+                    repo=repo,
+                    task="FR",
+                    id=ident,
+                    event=claim.event,
+                    action="mrb_fail_hold",
+                    line=claim.line or f"FR {ident} held after MRB FAIL",
+                    url=claim.url,
+                ),
+            )
+            save_queue(home, doc)
+            return "kept:FR:mrb_fail"
         # Issue closed: drop FR/MRB/UAT for this issue id (and PR rows that only tracked it).
         n = _remove_tasks_for_ids(doc, repo, (ident,), {"FR", "MRB", "UAT", "PR", "FIX"})
         save_queue(home, doc)
@@ -365,6 +518,39 @@ def apply_queue_event(home: Path, claim: Claim) -> str:
     if task == "UAT":
         # K4: merged PR — remove the MRB row for this PR (not just FR id), then UAT linked FRs.
         pr = pr_id or ident
+        # K15: MRB FAIL then merge with Closes → restore FR, never UAT.
+        if _done_has_mrb_fail_for_pr(doc, repo, pr) or any(
+            _has_mrb_fail_hold(doc, repo, fr) for fr in (links if links else ())
+        ):
+            _remove_tasks_for_ids(doc, repo, (pr,), {"MRB"})
+            _remove_matching(
+                doc["accepted"],
+                lambda r: str(r.get("repo")) == repo
+                and str(r.get("task") or "").upper() == "MRB"
+                and (
+                    _norm_ident(str(r.get("id") or "")) == pr
+                    or _norm_ident(str(r.get("pr_id") or "")) == pr
+                ),
+            )
+            restores = links if links else ()
+            for fr in restores:
+                fr_id = _norm_ident(fr)
+                _remove_tasks_for_ids(doc, repo, (fr_id,), {"UAT", "PR"})
+                _add_mrb_fail_hold(doc, repo, (fr_id,))
+                _append_unaccepted(
+                    doc,
+                    Claim(
+                        repo=repo,
+                        task="FR",
+                        id=fr_id,
+                        event=claim.event,
+                        action="mrb_fail",
+                        line=claim.line,
+                        url=claim.url,
+                    ),
+                )
+            save_queue(home, doc)
+            return "restored:FR:mrb_fail"
         _remove_tasks_for_ids(doc, repo, (pr,), {"MRB"})
         # drop accepted MRB for this PR so workers don't stay on merged work
         _remove_matching(
@@ -671,7 +857,7 @@ def accepted_rows(home: Path) -> list[dict]:
     return list(load_queue(home).get("accepted") or [])
 
 def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result: str = "ok", url: str = "") -> tuple[str, dict | None]:
-    """DONE path: accepted → done; worker idle; optional supersede hook point."""
+    """DONE path: accepted → done; worker idle; K15 MRB FAIL restores linked FR."""
     doc = load_queue(home)
     ident = _norm_ident(ident)
     repo = _norm_repo(repo)
@@ -700,6 +886,18 @@ def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result
     if len(doc["done"]) > DONE_CAP:
         doc["done"] = doc["done"][-DONE_CAP:]
     doc["workers"][nick_s] = {"state": "idle", "ts": _utc_now()}
+    # K15 / FR #16 / #207: MRB FAIL → remove MRB, restore linked FR, hold against CLOSE.
+    if task_u == "MRB" and is_mrb_fail_result(result):
+        fr_ids = _fr_ids_from_mrb_row(match)
+        pr = _norm_ident(str(match.get("pr_id") or match.get("id") or ident))
+        _restore_frs_after_mrb_fail(
+            doc,
+            repo=repo,
+            pr_id=pr,
+            fr_ids=fr_ids,
+            line=str(match.get("line") or ""),
+            url=url or str(match.get("url") or ""),
+        )
     save_queue(home, doc)
     return "done", match
 
