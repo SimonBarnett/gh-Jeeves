@@ -79,3 +79,11 @@ G2: check `NAMES` on `#bobiverse` and a shop (e.g. `#flamingo`) after bob/simon 
 
 Code: `jeeves.mode_grants.ModeGrantController`.
 
+## Results
+
+### G2 live smoke (26 Sep 2026, ionos, `823abd5`)
+
+- **14:20:59 BST** — opened the live-smoke issue `bob-design-uat#76`.
+- **14:58:28 BST** — opened the throwaway smoke PR `bob-design-uat#77`.
+- **14:58:47 BST** — closed the throwaway smoke PR without merging.
+- **14:58:50 BST** — closed the live-smoke issue.
