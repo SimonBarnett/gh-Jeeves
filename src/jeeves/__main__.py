@@ -428,5 +428,42 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _main_with_exception_report(argv: list[str] | None = None) -> int:
+    """FR #148: top-level catch-all → deterministic GitHub issue / spool."""
+    from .exception_report import ExceptionReporter, install_sys_excepthook
+    from .prod_receiver import jeeves_home_from_env
+
+    home = jeeves_home_from_env()
+    try:
+        # Prefer explicit --jeeves-home if present in argv (light parse)
+        raw = list(argv if argv is not None else sys.argv[1:])
+        if "--jeeves-home" in raw:
+            i = raw.index("--jeeves-home")
+            if i + 1 < len(raw):
+                home = Path(raw[i + 1]).expanduser()
+    except Exception:
+        pass
+    home.mkdir(parents=True, exist_ok=True)
+    reporter = ExceptionReporter(home=home)
+    install_sys_excepthook(reporter)
+    try:
+        drained = reporter.drain_spool(limit=20)
+        if drained:
+            print(f"INFO exception_spool drained n={len(drained)}", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"INFO exception_spool drain skip {type(exc).__name__}", flush=True)
+    try:
+        return int(main(argv))
+    except SystemExit as e:
+        code = e.code
+        return int(code) if isinstance(code, int) else (0 if code is None else 1)
+    except KeyboardInterrupt:
+        return 130
+    except BaseException as exc:  # noqa: BLE001
+        reporter.report(exc, component="python -m jeeves")
+        print(f"ERROR {type(exc).__name__}: {exc}", flush=True)
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_main_with_exception_report())
