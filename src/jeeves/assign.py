@@ -329,7 +329,8 @@ class ChairAssignState:
             pick = dict(row)
             break
         if pick is None:
-            # Distinguish empty vs all blocked
+            # Distinguish empty vs all blocked (FR #141: strict focus with no
+            # matching focused jobs also yields nothing queued).
             if not ordered_unaccepted(home):
                 line = format_nothing_queued(nick)
                 return AssignDecision("nothing", line=line, reason="empty")

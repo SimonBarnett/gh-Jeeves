@@ -127,13 +127,15 @@ def _reg() -> tuple[CommandSpec, ...]:
         ),
         CommandSpec(
             name="focus",
-            syntax="!focus [n|high|medium|low] {repo|owner/repo#N}",
+            syntax="!focus [strict on|off]|[n|high|medium|low] {repo|owner/repo#N}",
             summary="priority-sort !list and assign-on-!bored (simon account)",
             roles=frozenset({ROLE_SIMON}),
-            example="!focus SimonBarnett/gh-Jeeves#110",
+            example="!focus strict on",
             details=(
-                "FR #68/#113: focus.json beside queue. Items (owner/repo#N) rank ahead of "
-                "repo focus. Lower number first. Bare !focus lists items then repos. "
+                "FR #68/#113/#141: focus.json beside queue. Items (owner/repo#N) rank ahead of "
+                "repo focus. Lower number first. Bare !focus lists strict flag, items, then repos. "
+                "!focus strict on|off: when on, !list and !bored only use focused items/repos "
+                "(empty focus → nothing queued). Closed item focus is auto-cleared. "
                 "PM only. Simon services account (like !sweep)."
             ),
             related=("unfocus", "list"),
