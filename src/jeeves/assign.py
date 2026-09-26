@@ -32,6 +32,8 @@ from .queue import load_queue, ordered_unaccepted, tasks_equivalent, worker_stat
 log = logging.getLogger("jeeves.assign")
 
 DEFAULT_OFFER_TIMEOUT_S = 300.0  # 5 minutes
+# FR #133: after this many timed-out offers of the same job to the same seat, skip it.
+DEFAULT_MAX_OFFER_ATTEMPTS = 3
 
 _ASSIGN_RE = re.compile(
     r"^(\S+):\s+(FR|MRB|UAT)\s+"
@@ -170,7 +172,10 @@ class ChairAssignState:
     """Outstanding offers keyed by worker nick; persisted under home/offers.json."""
 
     timeout_s: float = DEFAULT_OFFER_TIMEOUT_S
+    max_offer_attempts: int = DEFAULT_MAX_OFFER_ATTEMPTS
     open: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # FR #133: nick|row_key → timed-out offer count without ACK
+    attempts: dict[str, int] = field(default_factory=dict)
     history: list[str] = field(default_factory=list)
     _home: Path | None = None
 
@@ -190,22 +195,38 @@ class ChairAssignState:
             return
         if isinstance(doc, dict) and isinstance(doc.get("open"), dict):
             self.open = {str(k): dict(v) for k, v in doc["open"].items() if isinstance(v, dict)}
+        if isinstance(doc, dict) and isinstance(doc.get("attempts"), dict):
+            self.attempts = {
+                str(k): int(v)
+                for k, v in doc["attempts"].items()
+                if str(k) and int(v) > 0
+            }
 
     def save(self) -> None:
         if self._home is None:
             return
         path = offers_path(self._home)
         tmp = path.with_suffix(".tmp")
-        body = json.dumps({"v": 1, "open": self.open}, indent=2, sort_keys=True) + "\n"
+        body = json.dumps(
+            {"v": 1, "open": self.open, "attempts": self.attempts},
+            indent=2,
+            sort_keys=True,
+        ) + "\n"
         tmp.write_text(body, encoding="utf-8")
         tmp.replace(path)
 
     def clear(self, nick: str) -> None:
         self.open.pop(nick, None)
+        # Successful ACK/DONE: clear attempt counters for this nick
+        prefix = f"{nick}|"
+        self.attempts = {k: v for k, v in self.attempts.items() if not k.startswith(prefix)}
         self.save()
 
     def has_open(self, nick: str) -> bool:
         return nick in self.open
+
+    def _attempt_key(self, nick: str, row: dict[str, Any]) -> str:
+        return f"{nick}|{row_key(row)}"
 
     def expire_timed_out(self, now: float | None = None) -> list[str]:
         now_f = time.time() if now is None else float(now)
@@ -214,11 +235,26 @@ class ChairAssignState:
             offered_at = float(ent.get("offered_at") or 0.0)
             if offered_at <= 0 or (now_f - offered_at) >= float(self.timeout_s):
                 expired.append(nick)
+                row = ent.get("row") if isinstance(ent.get("row"), dict) else None
+                if isinstance(row, dict) and row.get("repo"):
+                    ak = self._attempt_key(nick, row)
+                    self.attempts[ak] = int(self.attempts.get(ak) or 0) + 1
+                    log.info(
+                        "event=offer_timeout nick=%s job=%s attempts=%s",
+                        nick,
+                        row_key(row),
+                        self.attempts[ak],
+                    )
                 self.open.pop(nick, None)
         if expired:
             self.save()
             for n in expired:
-                log.info("event=offer_timeout nick=%s", n)
+                if not any(
+                    True
+                    for k in self.attempts
+                    if k.startswith(f"{n}|")
+                ):
+                    log.info("event=offer_timeout nick=%s", n)
         return expired
 
     def offered_keys(self) -> set[str]:
@@ -279,6 +315,16 @@ class ChairAssignState:
             if key in offered:
                 continue
             if mrb_blocked_for_author(row, nick, live):
+                continue
+            # FR #133: skip jobs this seat was offered N times with no ACK.
+            ak = self._attempt_key(canon, row)
+            if int(self.attempts.get(ak) or 0) >= int(self.max_offer_attempts):
+                log.info(
+                    "event=offer_skip_attempts nick=%s job=%s attempts=%s",
+                    canon,
+                    key,
+                    self.attempts.get(ak),
+                )
                 continue
             pick = dict(row)
             break

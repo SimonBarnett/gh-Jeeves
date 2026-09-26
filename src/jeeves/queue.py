@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger("jeeves.queue")
 
 QUEUE_VERSION = 1
 ACCEPTED_CAP = 200
@@ -24,6 +27,18 @@ _CLOSES_RE = re.compile(
 _PR_URL_RE = re.compile(
     r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)",
     re.I,
+)
+# FR #133: permanent MRB-home / evergreen boards — never enqueue as FR jobs.
+_EVERGREEN_TITLE = re.compile(
+    r"(?i)\bMRB\s+home\b|\bHostile\s+MRB\s+home\b|\bMRB:\s+\S+.*\bhandoff\b",
+)
+_EVERGREEN_LABELS = frozenset(
+    {
+        "mrb-home",
+        "mrb_home",
+        "evergreen",
+        "evergreen-mrb",
+    }
 )
 
 # Log-once set for no-match ACK reasons (cleared in tests).
@@ -270,6 +285,27 @@ def extract_closes_issue_ids(*texts: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def is_evergreen_mrb_home(
+    title: str,
+    labels: list | tuple | None = None,
+    *,
+    body: str = "",
+) -> bool:
+    """FR #133: permanent MRB-home boards must not become FR queue jobs."""
+    blob = f"{title or ''}\n{body or ''}"
+    if _EVERGREEN_TITLE.search(title or "") or _EVERGREEN_TITLE.search(blob):
+        return True
+    for lab in labels or []:
+        name = ""
+        if isinstance(lab, dict):
+            name = str(lab.get("name") or "")
+        else:
+            name = str(lab or "")
+        if name.strip().lower() in _EVERGREEN_LABELS:
+            return True
+    return False
+
+
 def claim_from_payload(event: str, payload: dict) -> Claim | None:
     """Map GitHub webhook event → queue claim (FR/MRB/UAT). K4 / #207 supersede fields."""
     repo_obj = payload.get("repository") or {}
@@ -291,7 +327,16 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
         title = str(issue.get("title") or "")[:120]
         body = str(issue.get("body") or "")
         url = str(issue.get("html_url") or "")
+        labels = issue.get("labels") or []
         if action in ("opened", "reopened"):
+            if is_evergreen_mrb_home(title, labels, body=body):
+                log.info(
+                    "event=skip_evergreen_fr repo=%s id=%s title=%s",
+                    full,
+                    ident,
+                    title[:80],
+                )
+                return None
             return Claim(
                 repo=full,
                 task="FR",
@@ -519,6 +564,11 @@ def apply_queue_event(home: Path, claim: Claim) -> str:
         return f"removed:{n}"
 
     if task == "FR":
+        # FR #133: evergreen / MRB-home boards never enter the FR offer queue.
+        if is_evergreen_mrb_home(claim.line, body=claim.line):
+            _remove_tasks_for_ids(doc, repo, (ident,), {"FR", "PR"})
+            save_queue(home, doc)
+            return "skipped:FR:evergreen"
         # FR #134: open MRB that links this issue keeps FR out of the offerable queue.
         if fr_superseded_by_open_mrb(doc, repo, ident):
             _remove_tasks_for_ids(doc, repo, (ident,), {"FR", "PR", "UAT"})
@@ -904,6 +954,7 @@ def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result
     task_u = str(task or "").upper()
     nick_s = str(nick or "").strip()
     match = None
+    mode_mismatch = False
     for i, row in enumerate(list(doc["accepted"])):
         if (
             str(row.get("nick") or "") == nick_s
@@ -913,11 +964,34 @@ def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result
         ):
             match = doc["accepted"].pop(i)
             break
+    # FR #133: accept DONE when repo+# match even if FR/MRB/UAT word differs.
+    if match is None:
+        for i, row in enumerate(list(doc["accepted"])):
+            if (
+                str(row.get("nick") or "") == nick_s
+                and _norm_repo(str(row.get("repo") or "")) == repo
+                and _norm_ident(str(row.get("id") or "")) == ident
+            ):
+                match = doc["accepted"].pop(i)
+                mode_mismatch = True
+                break
     if match is None:
         # still allow DONE to clear busy if row missing
         doc["workers"][nick_s] = {"state": "idle", "ts": _utc_now()}
         save_queue(home, doc)
         return "no_match", None
+    if mode_mismatch:
+        queued_task = str(match.get("task") or "").upper()
+        log.warning(
+            "done_mode_mismatch nick=%s job=%s#%s done_task=%s queued_task=%s",
+            nick_s,
+            repo,
+            ident,
+            task_u,
+            queued_task,
+        )
+        match["done_task"] = task_u
+        match["queued_task"] = queued_task
     match["done_ts"] = _utc_now()
     match["result"] = result
     if url:
@@ -926,8 +1000,12 @@ def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result
     if len(doc["done"]) > DONE_CAP:
         doc["done"] = doc["done"][-DONE_CAP:]
     doc["workers"][nick_s] = {"state": "idle", "ts": _utc_now()}
+    queued_task_u = str(
+        match.get("queued_task") or match.get("task") or task_u
+    ).upper()
     # K15 / FR #16 / #207: MRB FAIL → remove MRB, restore linked FR, hold against CLOSE.
-    if task_u == "MRB" and is_mrb_fail_result(result):
+    # Use the queued task (FR #133 mode mismatch: DONE said MRB but seat held FR).
+    if queued_task_u == "MRB" and is_mrb_fail_result(result):
         fr_ids = _fr_ids_from_mrb_row(match)
         pr = _norm_ident(str(match.get("pr_id") or match.get("id") or ident))
         _restore_frs_after_mrb_fail(
@@ -940,11 +1018,12 @@ def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result
         )
     save_queue(home, doc)
     # FR #134: DONE FR with a PR URL → drop FR from offerable queue; enqueue MRB; focus follows.
-    if tasks_equivalent(task_u, "FR") and url:
+    if tasks_equivalent(queued_task_u, "FR") and url:
         pr_hit = pr_ref_from_url(url)
         if pr_hit:
             pr_repo, pr_id = pr_hit
             use_repo = repo or pr_repo
+            fr_id = _norm_ident(str(match.get("id") or ident))
             apply_queue_event(
                 home,
                 Claim(
@@ -953,9 +1032,9 @@ def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result
                     id=pr_id,
                     event="done_supersede",
                     action="done_fr_pr",
-                    line=f"MRB {pr_id} after DONE FR {ident} Closes {ident}",
+                    line=f"MRB {pr_id} after DONE FR {fr_id} Closes {fr_id}",
                     url=url,
-                    refs=(ident,),
+                    refs=(fr_id,),
                     pr_id=pr_id,
                 ),
             )
