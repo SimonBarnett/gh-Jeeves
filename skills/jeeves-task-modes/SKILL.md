@@ -30,20 +30,36 @@ free seat it may continue into MRB.
 ```mermaid
 flowchart TD
   A[Check out PR, read intent + source FR] --> B[Add new tests first]
-  B --> C[Run tests + hostile review]
-  C -->|PASS| D[Review docs vs new behaviour]
+  B --> C[Run full tests/ suite + hostile review]
+  C --> V[Post mrb/verdict check — other seat only]
+  V -->|PASS| D[Review docs vs new behaviour]
   D -->|stale| E[One docs PR, merge with original]
-  D -->|ok| F[Merge, close source FR]
+  D -->|ok| F[Merge only if mrb/verdict success]
   E --> F
-  C -->|FAIL| G[One fix PR, merge both; FR stays open]
+  V -->|FAIL| G[One fix PR; other seat MRBs fix]
 ```
 
-*Caption: tests first, then hostile review; PASS may add one docs PR, FAIL adds exactly one fix PR.*
+*Caption: tests first, then hostile review; FR #92 gate blocks self-MRB and instant PASS.*
+
+### FR #92 — no self-merge / real MRB (enforced)
+
+- Author PR body **must** include `Seat: {your-irc-nick}`.
+- **Never** MRB or merge a PR whose `Seat:` is you (except the documented one-seat CAST IRON path Simon allows).
+- Full suite only: `python -m pytest tests/ -q` (not scoped paths). Keep wall clock.
+- After review, **reviewing** seat posts the required check:
+  ```powershell
+  python tools/post_mrb_verdict.py --repo OWNER/REPO --pr N `
+    --reviewer-seat YOUR-NICK `
+    --pytest-cmd "python -m pytest tests/ -q" --pytest-exit 0 `
+    --duration-s SECONDS --verdict PASS
+  ```
+- Check name: **`mrb/verdict`**. Fails if reviewer==author, suite not full/green on PASS, or duration < 10 minutes.
+- Details: `docs/mrb-enforcement.md`. Simon configures branch protection to require `mrb/verdict`.
 
 - **PASS:** review README, `skills/`, `docs/`, diagrams and help text; if
   anything is stale, open **one** docs PR and merge it with the original. Close
   the source FR. The merge after PASS makes the queue item a **UAT**.
-- **FAIL:** open **one** fix PR and merge both. The source FR stays open, so
+- **FAIL:** open **one** fix PR; another seat MRBs it. The source FR stays open, so
   the queue restores the **FR** (`DONE MRB … FAIL` → `mrb_fail_hold`). If
   GitHub still auto-closes the issue because the implementer PR said
   `Closes #n`, Jeeves **keeps the FR** on the CLOSE/UAT path (K15 / FR #16).
@@ -52,7 +68,7 @@ flowchart TD
 
 ## Worker hygiene
 
-- Work arrives only as the ear's offer in your own `#{machine}`; ACK it before starting.
-- Send `DONE` (or `GIVEUP`) when finished; then after >2 min idle send `!bored`.
+- Work arrives as Jeeves assign / ACK in your own `#{machine}`; ACK before starting.
+- Send `DONE` (or `GIVEUP`) when finished; then `!bored` again.
 
 Related: `jeeves-shop-protocol`, `jeeves-queue`.
