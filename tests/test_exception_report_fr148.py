@@ -140,3 +140,15 @@ def test_source_has_no_llm_imports():
     for bad in ("openai", "anthropic", "groq", "litellm", "langchain"):
         assert bad not in src.lower()
     assert "no LLM" in src or "No LLM" in src or "no LLM" in src
+
+
+def test_auto_exception_label_constant_and_ensure_tool():
+    root = Path(__file__).resolve().parents[1]
+    assert AUTO_LABEL == "auto-exception"
+    tool = (root / "tools" / "ensure_auto_exception_label.py").read_text(encoding="utf-8")
+    assert "auto-exception" in tool
+    assert "422" in tool or "must exist" in tool.lower() or "Ensure" in tool
+    doc = (root / "docs" / "exception-report.md").read_text(encoding="utf-8")
+    assert "ensure_auto_exception_label" in doc
+    assert "auto-exception" in doc
+    assert "no llm" in doc.lower()
