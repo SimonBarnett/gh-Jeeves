@@ -277,12 +277,22 @@ def build_outstanding(
             ident = _num_id(num)
             if ident in superseded_fr:
                 continue
+            title = str(issue.get("title") or "")[:120]
+            # FR #133: evergreen MRB-home boards never become FR jobs (resync path).
+            from .queue import is_evergreen_mrb_home
+
+            if is_evergreen_mrb_home(
+                title,
+                issue.get("labels") or [],
+                body=str(issue.get("body") or ""),
+            ):
+                continue
             rows.append(
                 {
                     "repo": repo,
                     "task": "FR",
                     "id": ident,
-                    "line": str(issue.get("title") or "")[:120],
+                    "line": title,
                     "url": str(issue.get("html_url") or ""),
                     "created_at": issue.get("created_at") or "",
                     "seq": int(_created_ts(issue) * 1000) + int(num),
