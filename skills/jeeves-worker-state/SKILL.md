@@ -11,6 +11,15 @@ description: >
 Seed FR: #21. Busy/idle comes from shop ACK/DONE that Jeeves records — never
 from how a seat's console looks (hidden runs look idle while working).
 
+**K12 / FR #13:** TipForm START tiles read `machines.<id>.working_on` (and
+pid `workers.*.working_on`) that Jeeves sets on ACK and clears on DONE.
+AgentMonitor hidden `-p` wakes (AgentMonitor #90) may leave the visible TUI
+looking idle — the webhook/TipForm is the operator busy signal.
+
+**Worker pack must echo the task in the seat** on ACK (print a clear line such
+as `WORKING: FR owner/repo#n` before work) so chat history shows the job even
+when the TUI does not reload.
+
 Agentic control is an overlay: the token-less path must never depend on this skill.
 
 ## Source of truth
@@ -18,7 +27,7 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 `GET https://{bob-host}/bob/v1/report` (digest webhook):
 
 - `machines.<id>`: `nick`, `online`, `lastSeen`, `jobs`, `running`, `queued`,
-  `working_on`, `workers{pid:{working_on, agent, model}}`.
+  `working_on` (**TipForm busy text**), `workers{pid:{working_on, agent, model}}`.
 - `queue{unaccepted, accepted, done}`.
 
 ## State table
@@ -26,8 +35,8 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 | Shop line (own `#{machine}`) | Queue | Worker | Activity |
 |------|-------|--------|----------|
 | `!bored` | Jeeves assigns next (`!focus` order) or `<nick>: nothing queued` | unchanged until ACK | — |
-| `ACK <TYPE> <repo>#<n>` | unaccepted → accepted | busy | `<MODE> <repo>#<n> <title>` (TipForm START tile) |
-| `DONE <TYPE> <repo>#<n> …` | accepted → done + supersede | idle | cleared; worker `!bored` again |
+| `ACK <TYPE> <repo>#<n>` | unaccepted → accepted | busy | `machines.<id>.working_on` + TipForm START; seat echoes task |
+| `DONE <TYPE> <repo>#<n> …` | accepted → done + supersede | idle | `working_on` cleared; worker `!bored` again |
 | QUIT / DONE timeout / GIVEUP / NACK | accepted → unaccepted | idle | cleared |
 
 ```mermaid
