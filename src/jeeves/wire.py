@@ -11,10 +11,13 @@ _ACK = re.compile(
     r"^ACK\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)(?:\s+(.*))?$",
     re.I,
 )
+# Allow any trailing text after the number (FR #135: FAIL fix#N URL must not drop DONE).
 _DONE = re.compile(
-    r"^DONE\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)(?:\s+(\S+))?(?:\s+(\S+))?\s*$",
+    r"^DONE\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)(?:\s+(.*))?$",
     re.I,
 )
+_DONE_URL = re.compile(r"https?://\S+", re.I)
+_DONE_RESULT = re.compile(r"\b(PASS-nits|PASS|FAIL)\b", re.I)
 _NACK = re.compile(
     r"^(NACK|GIVEUP)\s+(FR|MRB|UAT)\s+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s*#?\s*(\d+)(?:\s+(.*))?$",
     re.I,
@@ -22,6 +25,9 @@ _NACK = re.compile(
 # Prefix that looks like an ACK but failed the full parse (for reject hint).
 _ACK_PREFIX = re.compile(r"^ACK\b", re.I)
 _ACK_HINT = "format: ACK FR|MRB|UAT owner/repo#N"
+# Prefix that looks like DONE but may still fail parse_done (FR #135).
+_DONE_PREFIX = re.compile(r"^DONE\b", re.I)
+_DONE_HINT = "format: DONE FR|MRB|UAT owner/repo#N [PASS|FAIL] [url] …"
 # !bored / !BORED — Jeeves assigns (FR #106); ear OFFER path retired.
 _BORED = re.compile(r"^!+\s*bored\b", re.I)
 # !list with zero or more args (all, repo, fr, …) — FR #50
@@ -155,16 +161,45 @@ def ack_format_hint() -> str:
 
 
 def parse_done(body: str) -> DoneMsg | None:
+    """Parse DONE FR|MRB|UAT owner/repo#N with any trailing text (FR #135).
+
+    Extracts PASS/FAIL/PASS-nits when present, else first non-URL token (or ``ok``).
+    First ``http(s)://…`` token becomes ``url``.
+    """
     m = _DONE.match((body or "").strip())
     if not m:
         return None
+    rest = (m.group(4) or "").strip()
+    url = ""
+    um = _DONE_URL.search(rest)
+    if um:
+        url = um.group(0).rstrip(".,);]>\"'")
+    result = "ok"
+    rm = _DONE_RESULT.search(rest)
+    if rm:
+        result = rm.group(1)
+    elif rest:
+        for tok in rest.split():
+            if tok.lower().startswith("http://") or tok.lower().startswith("https://"):
+                continue
+            result = tok
+            break
     return DoneMsg(
         task=m.group(1).upper(),
         repo=m.group(2),
         number=m.group(3),
-        result=(m.group(4) or "ok"),
-        url=(m.group(5) or ""),
+        result=result,
+        url=url,
     )
+
+
+def looks_like_done(body: str) -> bool:
+    """True when the line starts with DONE but may still fail parse_done."""
+    return bool(_DONE_PREFIX.match((body or "").strip()))
+
+
+def done_format_hint() -> str:
+    return _DONE_HINT
 
 
 def parse_nack(body: str) -> tuple[str, str, str, str] | None:

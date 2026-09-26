@@ -69,6 +69,7 @@ from .wire import (
     is_unfocus,
     is_unignore,
     looks_like_ack,
+    looks_like_done,
     parse_ack,
     parse_done,
     parse_list_filters,
@@ -832,6 +833,15 @@ class JeevesChair:
                 (done.task or "FR").upper(),
             )
             log.info("cmd=done nick=%s repo=%s#%s", src, done.repo, done.number)
+            return
+        if looks_like_done(text):
+            # FR #135: never silently drop a DONE* line that failed the full parse.
+            log.warning(
+                "done_unparsed nick=%s text=%s",
+                src,
+                (text or "")[:240],
+            )
+            self.handled.append(f"done_unparsed:{src}")
             return
 
     def _handle_bored_assign(self, src: str, target: str) -> None:
