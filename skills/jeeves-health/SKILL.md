@@ -11,7 +11,11 @@ description: >
 
 Seed FR: #18.
 
-Agentic control is an overlay: the token-less path must never depend on this skill.
+## Overlay
+
+**Agentic control is an overlay.** The token-less path (brief section 0 / issue #1)
+must **never** depend on this skill or an LLM. Scripts own G1; this skill helps
+operators diagnose. Report-only — **never** start/stop Ergo or BobIrcd.
 
 ## Checks
 
@@ -26,6 +30,7 @@ flowchart TD
   L -->|no| F4[check webhook writer]
   L -->|yes| V[running version = latest release?]
   V -->|no| F5[jeeves-release]
+  V -->|yes| T[throttle backoff on too many connections?]
 ```
 
 *Caption: work top-down; the first failing check tells you which skill to run next.*
@@ -38,36 +43,45 @@ flowchart TD
    - `event=auth method=sasl|pass|none result=…` (never secrets)
    - `event=join channel=#…` / `event=part channel=#…`
    - `event=list channels=N run=N`
-   - `event=announce repo=owner/name#n mode=FR|MRB|…`
-   - `event=ack` / `event=done` nick + job
-   - `event=cmd name=list|help|…`
-   - `event=resync phase=start|end … counts`
+   - `event=announce` / `event=ack` / `event=done`
+   - `event=resync` phase start/end with counts
 3. **Presence:** nick `Jeeves` is in `#bobiverse` (op) and silently in every
-   `#{machine}` listed in the fleet registry (confirm via log joins + IRC if needed).
-4. **Digest:** `GET https://{bob-host}/bob/v1/report` — Jeeves `lastSeen` is fresh.
-5. **Version drift:** the version Jeeves reports equals the latest gh-Jeeves release tag.
-6. **Throttle:** on "too many connections", Jeeves must back off exponentially
-   and stay singleton — kill duplicates, don't reconnect-loop.
-6. **Service log (FR #73):** read `%JEEVES_HOME%\bobjeeves-service.log` (rotating).
-   Prefer these structured lines over an outside IRC probe nick:
-   - `event=connect host=… port=… tls=… nick=…`
-   - `event=auth method=sasl|pass|none result=…` (never secrets)
-   - `event=join channel=#…` / `event=part channel=#…`
-   - `event=list channels=N run=N`
-   - `event=announce repo=owner/name#n mode=…`
-   - `event=ack` / `event=done nick=… job=…`
-   - `event=cmd name=list|help|…`
-   - `event=resync_start` / `event=resync_end` with counts
-   Missing `event=connect` after service start ⇒ IRC path never came up.
+   `#{machine}` (confirm via log joins + IRC if needed).
+4. **Digest lastSeen:** `GET https://irc.ntsa.uk/bob/v1/report` — Jeeves /
+   machine `lastSeen` is fresh.
+5. **Version drift:** running version equals the latest gh-Jeeves release tag
+   (`jeeves-release` / `JEEVES_RELEASE_TAG`).
+6. **Throttle / backoff:** on "too many connections", Jeeves reconnects in place
+   with exponential backoff (cap ~30s, K13 / FR #14) — kill duplicates, do not
+   reconnect-loop.
+
+## Commands
+
+CI-safe **dry-run** first (no sockets, no service mutation):
+
+```powershell
+python -m jeeves.health --dry-run --json
+python -m jeeves health --dry-run --json
+```
+
+Live report-only probe (IRC TCP/TLS + optional `sc query`; still never mutates):
+
+```powershell
+python -m jeeves.health --json --host irc.ntsa.uk --port 6697
+python -m jeeves health --json
+```
+
+Exit codes: `0` ok, `1` degraded (live), `2` dry-run skill incomplete.
 
 ## Ops expectations
 
 - Jeeves is op in `#bobiverse`; each bob-{machine} is op in its own `#{machine}`.
-  Durable ops need ircd channel registration (owned outside this repo).
-- Owner ops only from a fleet machine's own client certificate — masked hosts
-  are shared per public IP, so never identify a machine by host.
-- A bob-{machine} may kick invalid workers from its own shop only; never
-  Jeeves or another bob.
-- If the ircd itself is down, **report it**; gh-Jeeves never touches Ergo/BobIrcd.
+- If the ircd itself is down, **report it**; gh-Jeeves never touches Ergo/BobIrcd
+  (raise agentic_build #327).
+- Related: `jeeves-install-service`, `jeeves-announce-debug`, `jeeves-release`.
 
-Related: `jeeves-install-service`, `jeeves-announce-debug`, `jeeves-release`.
+## Tests
+
+```text
+pytest -q tests/test_skill_health_fr18.py tests/cast_iron/test_k7_health_irc_down.py
+```

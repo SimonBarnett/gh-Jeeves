@@ -7,6 +7,7 @@ and never edits ``ircd.yaml``. Raise Ergo/BobIrcd fixes in agentic_build (#327).
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
 import ssl
@@ -29,6 +30,22 @@ FORBIDDEN_HEALTH_ACTIONS = (
 DEFAULT_IRC_HOST = "127.0.0.1"
 DEFAULT_IRC_PORT = 6697
 DEFAULT_CONNECT_TIMEOUT_S = 3.0
+
+SKILL_MD = Path(__file__).resolve().parents[2] / "skills" / "jeeves-health" / "SKILL.md"
+REQUIRED_SKILL_HEADINGS = (
+    "Checks",
+    "Commands",
+    "Overlay",
+)
+REQUIRED_SKILL_MARKERS = (
+    "name: jeeves-health",
+    "lastSeen",
+    "BobJeeves",
+    "#bobiverse",
+    "python -m jeeves.health",
+    "--dry-run",
+    "never",
+)
 
 
 @dataclass
@@ -247,6 +264,109 @@ def run_health(
     )
 
 
+def skill_complete(path: Path | None = None) -> list[str]:
+    """FR #18: return missing requirements for skills/jeeves-health/SKILL.md."""
+    path = path or SKILL_MD
+    missing: list[str] = []
+    if not path.is_file():
+        return ["skill file missing"]
+    text = path.read_text(encoding="utf-8")
+    if "TODO: seed FR" in text:
+        missing.append("still stub TODO")
+    if not text.strip().startswith("---"):
+        missing.append("missing frontmatter")
+    for h in REQUIRED_SKILL_HEADINGS:
+        if h.lower() not in text.lower():
+            missing.append(f"missing:{h}")
+    for m in REQUIRED_SKILL_MARKERS:
+        if m.lower() not in text.lower() and m not in text:
+            # case-sensitive markers that must appear as-is
+            if m.startswith("name:") or m.startswith("python") or m.startswith("--"):
+                if m not in text:
+                    missing.append(f"missing:{m}")
+            elif m.lower() not in text.lower():
+                missing.append(f"missing:{m}")
+    if "Ergo" not in text and "BobIrcd" not in text:
+        missing.append("missing:never-touch Ergo/BobIrcd note")
+    if "drift" not in text.lower():
+        missing.append("missing:version drift")
+    if "throttle" not in text.lower() and "backoff" not in text.lower():
+        missing.append("missing:throttle/backoff")
+    return missing
+
+
+def run_dry_run(repo_root: Path | None = None) -> dict[str, Any]:
+    """FR #18: offline health plan — no sockets, no service mutation."""
+    root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[2]
+    missing = skill_complete(root / "skills" / "jeeves-health" / "SKILL.md")
+    from .backoff import throttle_delay_s
+    from .versioning import check_drift, running_version
+
+    ver = running_version(root)
+    drift = check_drift(root=root)
+    # Sample backoff curve (policy only — no reconnect)
+    backoff = {
+        "attempt_1_s": throttle_delay_s(1, base=2.0, cap=30.0, jitter=0.0),
+        "attempt_3_s": throttle_delay_s(3, base=2.0, cap=30.0, jitter=0.0),
+        "cap_s": 30.0,
+        "policy": "exponential + jitter; cap 30s (K13 / FR #14)",
+    }
+    digest_home = os.environ.get("BOB_DIGEST_HOME") or ""
+    last_seen = ""
+    last_seen_note = "digest home unset — skip lastSeen in dry-run"
+    if digest_home:
+        try:
+            from .digest import load_digest
+
+            doc = load_digest(Path(digest_home))
+            # chair / Jeeves machine entry if present; else any lastSeen
+            machines = doc.get("machines") or {}
+            for mid, ent in machines.items() if isinstance(machines, dict) else []:
+                if isinstance(ent, dict) and ent.get("lastSeen"):
+                    last_seen = str(ent.get("lastSeen") or "")
+                    last_seen_note = f"machines.{mid}.lastSeen"
+                    break
+            if not last_seen and doc.get("ts"):
+                last_seen = str(doc.get("ts") or "")
+                last_seen_note = "digest.ts"
+        except Exception as e:
+            last_seen_note = f"digest read err={type(e).__name__}"
+
+    return {
+        "dry_run": True,
+        "report_only": True,
+        "never_touch_ircd": True,
+        "irc_probed": False,
+        "ok": missing == [],
+        "skill_complete": missing,
+        "version": ver.report_string if hasattr(ver, "report_string") else str(ver),
+        "version_drift": drift.as_dict() if hasattr(drift, "as_dict") else {},
+        "drift_ok": bool(getattr(drift, "ok", True)),
+        "lastSeen": last_seen,
+        "lastSeen_note": last_seen_note,
+        "throttle": backoff,
+        "backoff": backoff,
+        "forbidden": [
+            "Start/Stop/Create BobIrcd service",
+            "run the BobIrcd installer script",
+            "edit ircd.yaml",
+            "remediate Ergo",
+        ],
+        "commands": [
+            "python -m jeeves.health --dry-run --json",
+            "python -m jeeves health --dry-run --json",
+            "python -m jeeves.health --json --no-service-probe  # live IRC probe",
+        ],
+        "checks": [
+            "BobJeeves service (live probe only)",
+            "IRC TCP/TLS reachability (live probe only)",
+            "digest lastSeen freshness",
+            "version drift vs release tag",
+            "throttle backoff policy",
+        ],
+    }
+
+
 def health_source_forbids_ircd_mutation(source: str) -> list[str]:
     """Return matched forbidden patterns (empty = clean).
 
@@ -284,9 +404,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--out", default="", help="write JSON report path")
     p.add_argument("--no-service-probe", action="store_true")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="FR #18: offline plan (skill lint, version, throttle policy; no IRC/sockets)",
+    )
+    p.add_argument(
+        "--repo-root",
+        default="",
+        help="Repo root for skill/version dry-run (default: package parents)",
+    )
     args = p.parse_args(argv)
 
-    import os
+    if args.dry_run:
+        root = Path(args.repo_root) if args.repo_root else None
+        plan = run_dry_run(root)
+        print(json.dumps(plan, indent=2))
+        return 0 if plan.get("ok") else 2
 
     host = args.host or os.environ.get("AGENTIC_IRC_HOST") or DEFAULT_IRC_HOST
     port = int(args.port or os.environ.get("AGENTIC_IRC_PORT") or DEFAULT_IRC_PORT)
