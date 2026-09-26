@@ -59,7 +59,7 @@ flowchart LR
 9. Own Windows service; never touch Ergo/BobIrcd.  
 10. Busy/idle from ACK/DONE, not from TUI appearance.  
 11. `!ignore` / `!unignore` / `!ignored` (FR #75): suppress a repo from the whole Jeeves process (no announce, queue, `!list`, or assign). List persists in `ignored.json` beside `queue.json`. Simon (account) or `bob-*` ops mutate; `!ignored` is open.  
-12. `!focus` / `!unfocus` (FR #68): simon (services account) sets repo priority for `!list` and Jeeves assign-on-`!bored` (same sort). `high`/`medium`/`low` = 1/5/9; bare `!focus {repo}` = high. Persists `focus.json`; digest exposes `focus` additively.
+12. `!focus` / `!unfocus` (FR #68 / #141 / #154): simon (services account) sets repo priority for `!list` and Jeeves assign-on-`!bored` (same sort). `high`/`medium`/`low` = 1/5/9; bare `!focus {repo}` = high. `!focus strict on|off` persists in `focus.json`. Digest exposes `focus` (list) and additive `focus_strict` (boolean).
 
 Details: `docs/functional-spec.md`, `docs/vision.md`.
 
