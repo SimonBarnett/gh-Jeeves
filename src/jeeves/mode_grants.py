@@ -30,8 +30,10 @@ _JOIN = re.compile(
 _MODE = re.compile(r"(?i)^:?\S+\s+MODE\s+(\S+)\s+(\S+)(?:\s+(.*))?$")
 _ACCOUNT_NOTIFY = re.compile(r"(?i)^:?(\S+)!\S+\s+ACCOUNT\s+(\S+)")
 _WHO_315 = re.compile(r"(?i)^\S+\s+315\b")  # end of WHO
-# 354 WHOX custom — simplified: nick account host flags
-_WHOX = re.compile(r"(?i)^\S+\s+354\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)")
+# 354 WHOX custom — simplified: me nick account host flags
+_WHOX = re.compile(r"(?i)^:?\S+\s+354\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)")
+# 330 WHOIS logged-in-as: :server 330 me nick account :is logged in as
+_WHOIS_330 = re.compile(r"(?i)^:?\S+\s+330\s+\S+\s+(\S+)\s+(\S+)\s+:")
 # 353 NAMES: :server 353 me = #chan :@nick1 %nick2 nick3
 _NAMES_353 = re.compile(r"(?i)^:?\S+\s+353\s+\S+\s+[*=@]\s+(\S+)\s+:?(.*)$")
 _NICK_PREFIX = re.compile(r"^[@%+~&]+")
@@ -65,7 +67,12 @@ def bob_machine(nick: str) -> str | None:
 
 
 def is_simon_nick(nick: str) -> bool:
-    return (nick or "").strip().lower() == "simon"
+    """Owner nick: simon / simon-* (or JEEVES_OWNER_ACCOUNT)."""
+    from .focus import owner_account_name
+
+    n = (nick or "").strip().lower()
+    owner = owner_account_name()
+    return n == owner or n.startswith(f"{owner}-")
 
 
 def is_worker_style(nick: str) -> bool:
@@ -128,7 +135,9 @@ def desired_mode(
     if is_simon_nick(nick):
         if not p.authed:
             return None
-        if (p.account or "").strip().lower() != "simon":
+        from .focus import owner_account_name
+
+        if (p.account or "").strip().lower() != owner_account_name():
             return None
         if not simon_host_ok(p.host, fleet=fleet):
             return None
@@ -340,8 +349,30 @@ class ModeGrantController:
                 granted.append(f"{raw}:+{g}")
         return granted
 
+    def request_who(self, channel: str) -> None:
+        """FR #107: WHOX after JOIN/NAMES so pre-existing nicks get accounts."""
+        ch = (channel or "").strip()
+        if not ch.startswith("#"):
+            ch = "#" + ch
+        # %t c n a f — common Ergo/Unreal WHOX fields (nick account host flags)
+        try:
+            self.client.send_raw(f"WHO {ch} %tcnaf")
+            self.state.events.append(f"who_sent:{ch}")
+        except Exception:
+            pass
+
+    def request_whois(self, nick: str) -> None:
+        n = (nick or "").strip()
+        if not n:
+            return
+        try:
+            self.client.send_raw(f"WHOIS {n}")
+            self.state.events.append(f"whois_sent:{n}")
+        except Exception:
+            pass
+
     def on_names(self, channel: str, names_blob: str) -> list[str]:
-        """Handle 353 NAMES — resweep after Jeeves join/rejoin."""
+        """Handle 353 NAMES — resweep after Jeeves join/rejoin; WHO for accounts."""
         ch = (channel or "").strip().lower()
         if not ch.startswith("#"):
             ch = "#" + ch
@@ -349,10 +380,11 @@ class ModeGrantController:
         granted = self.sweep_channel(ch, tokens)
         self.state.pending_sweep.discard(ch)
         self.state.events.append(f"names_sweep:{ch}:{len(tokens)}")
+        self.request_who(ch)
         return granted
 
     def handle_raw(self, line: str) -> None:
-        """Parse JOIN / ACCOUNT / MODE / 353 NAMES from the wire."""
+        """Parse JOIN / ACCOUNT / MODE / 353 NAMES / WHOX / WHOIS from the wire."""
         s = (line or "").strip()
         m = _ACCOUNT_NOTIFY.match(s)
         if m:
@@ -365,6 +397,26 @@ class ModeGrantController:
             # late account: try grant on channels we know
             for ch in set(self.state.modes.keys()) | set(self.state.pending_sweep):
                 self.maybe_grant(nick, ch)
+            return
+        m = _WHOX.match(s)
+        if m:
+            nick, acct, host, _flags = m.group(1), m.group(2), m.group(3), m.group(4)
+            if host and host not in ("*", "0"):
+                self.set_host(nick, host)
+            if acct and acct not in ("*", "0"):
+                self.set_account(nick, acct)
+                for ch in set(self.state.modes.keys()) | set(self.state.pending_sweep):
+                    self.maybe_grant(nick, ch)
+            self.state.events.append(f"whox:{nick}:{acct}")
+            return
+        m = _WHOIS_330.match(s)
+        if m:
+            nick, acct = m.group(1), m.group(2)
+            if acct and acct not in ("*", "0"):
+                self.set_account(nick, acct)
+                for ch in set(self.state.modes.keys()) | set(self.state.pending_sweep):
+                    self.maybe_grant(nick, ch)
+            self.state.events.append(f"whois330:{nick}:{acct}")
             return
         m = _NAMES_353.match(s)
         if m:
@@ -385,6 +437,9 @@ class ModeGrantController:
             if account and account not in ("*", "0"):
                 self.set_account(nick, account)
             self.on_join(nick, channel, account=self.state.accounts.get(nick.lower()), host=host)
+            # FR #107: after our own JOIN, WHO the channel for pre-existing accounts
+            if nick.lower() == (self.jeeves_nick or "").strip().lower():
+                self.request_who(channel)
             return
         # MODE tracking from others / self
         if " MODE " in f" {s} ":
