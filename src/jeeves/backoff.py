@@ -1,5 +1,9 @@
-"""IRC reconnect backoff (K13 / FR #46): exponential + jitter on throttle ERROR."""
+"""IRC reconnect backoff (K13 / FR #14 / FR #46): exponential + jitter on throttle ERROR.
 
+Shared policy for Jeeves (`jeeves.tls_irc`) and ears: same `is_throttle_error` /
+`throttle_delay_s` (cap ~30s on reconnect). agentic_irc ears should call the same
+helpers or mirror this formula.
+"""
 from __future__ import annotations
 
 import random

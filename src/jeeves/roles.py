@@ -842,9 +842,17 @@ class JeevesChair:
             except Exception as e:
                 log.warning("stale_sweep_err=%s", type(e).__name__)
             try:
+                # K13 / FR #14: ensure socket before poll (recover after Ergo blip)
+                ensure = getattr(self.client, "ensure_connected", None)
+                if callable(ensure) and getattr(self.client, "sock", None) is None:
+                    if ensure(deadline=time.time() + 5.0):
+                        if self.auto_join_ctrl is not None:
+                            self.auto_join_ctrl.note_reconnect()
+                        else:
+                            self.client.join("#bobiverse", *self.shops)
                 msg = self.client.wait_privmsg(timeout=0.3)
             except OSError:
-                # FR #46: native TLS client reconnect-in-place (backoff on throttle)
+                # FR #46 / #14: native TLS client reconnect-in-place (backoff on throttle)
                 recon = getattr(self.client, "reconnect", None)
                 if callable(recon):
                     try:
