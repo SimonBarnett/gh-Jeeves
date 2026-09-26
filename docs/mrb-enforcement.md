@@ -1,5 +1,8 @@
 # FR #92: no-self-merge + real MRB (enforcement)
 
+This is **MRB #2** (implementation fidelity on PRs). For the agent-proposal
+**MRB #1** fit/vision gate, see `docs/mrb-gates.md` (FR #151).
+
 ## Problem
 
 Fleet seats share one GitHub identity (`SimonBarnett`). Prompt-only rules
