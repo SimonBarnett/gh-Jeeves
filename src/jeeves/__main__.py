@@ -35,6 +35,7 @@ def _parse(argv: list[str] | None = None) -> argparse.Namespace:
             "announce",
             "worker-state",
             "release",
+            "gate",
         ),
         help="Process role (default all); *-tools = report-only skill CLIs",
     )
@@ -171,6 +172,10 @@ def main(argv: list[str] | None = None) -> int:
         from . import release_tool as release_tool_mod
 
         return release_tool_mod.main(raw[1:])
+    if raw and raw[0] == "gate":
+        from . import token_less_gate_tool as gate_tool_mod
+
+        return gate_tool_mod.main(raw[1:])
     args = _parse(argv)
     if args.mode == "dry-run":
         import json

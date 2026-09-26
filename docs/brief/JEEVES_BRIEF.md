@@ -79,7 +79,7 @@ Seed skills (each is a seed FR with a test or lint that checks the skill exists 
 - **jeeves-announce-debug**: a GitHub delivery isn't announced (hook deliveries, receiver secret filter #206, chair-outbox, 417 long lines). **FR #20** + `python -m jeeves.announce_tool --dry-run --json` / `tests/test_skill_announce_debug_fr20.py`.
 - **jeeves-worker-state**: interpret ACK/DONE, busy/idle on the webhook, stale START tiles, stuck accepted items. **FR #21** + `python -m jeeves.worker_state_tool --dry-run --json` / `tests/test_skill_worker_state_fr21.py`.
 - **jeeves-release**: tag, deploy from a release, and roll back. **FR #22** + `python -m jeeves.release_tool --dry-run --json` / `tests/test_skill_release_fr22.py`.
-- **jeeves-token-less-gate**: run the section 0 end-to-end test (G1 local test ircd, G2 live smoke).
+- **jeeves-token-less-gate**: run the section 0 end-to-end test (G1 local test ircd, G2 live smoke). **FR #23** + `python -m jeeves.token_less_gate_tool --dry-run --json` / `tests/test_skill_token_less_gate_fr23.py`.
 
 `skills/README.md` lists the skills, and the installer can copy `skills/` into agents' skill folders the same way Install-BobFleet does for the other books.
 
