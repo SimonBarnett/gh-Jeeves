@@ -36,6 +36,25 @@ Copy `config/bobjeeves.example.json` → `config/bobjeeves.json` (or
 - `disable_resync` / `-ResyncDisable` / `-DisableResync` → `--no-resync` + `JEEVES_RESYNC_DISABLE=1`
 - `receiver_port` (default **19781**)
 - `jeeves_home` / `digest_home` (must differ)
+- `JEEVES_OWNER_ACCOUNT` (default `simon`) — Ergo services account that may
+  `!focus` / `!unfocus` / `!ignore` / `!sweep` (nick `simon` or `simon-*`)
+
+### Owner account on Ergo (FR #107)
+
+`!focus` / `!sweep` / `!ignore` require a **registered** services account matching
+`JEEVES_OWNER_ACCOUNT` (default `simon`). Nick alone is not enough when mode
+grants are live. Jeeves learns accounts via extended-join, account-notify, and
+**WHO/WHOX** after JOIN (for nicks already in the channel).
+
+If `accounts.registration.enabled` is false on Ergo (ionos), an oper must create
+the account, for example:
+
+```text
+/NS SAREGISTER simon <password>
+```
+
+Then identify as that account from the fleet host. Without this, focus/ignore
+denials log `account=none live=True`.
 
 ## Commands (CI-safe dry-run first)
 

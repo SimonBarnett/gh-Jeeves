@@ -234,15 +234,18 @@ def repo_from_payload(payload: dict) -> str:
 
 
 def may_mutate_ignore(nick: str, *, account: str | None = None) -> bool:
-    """Simon (services account simon when known) or ops (bob-*)."""
+    """Owner (simon / simon-* + services account) or ops (bob-*)."""
+    from .focus import owner_account_name
+
     n = (nick or "").strip().lower()
     if n.startswith("bob-"):
         return True
-    if n == "simon" or n.startswith("simon-"):
+    owner = owner_account_name()
+    if n == owner or n.startswith(f"{owner}-"):
         if account is None:
-            # tests / no mode_grants: nick alone is enough for simon
+            # tests / no mode_grants: nick alone is enough for owner
             return True
-        return (account or "").strip().lower() == "simon"
+        return (account or "").strip().lower() == owner
     return False
 
 

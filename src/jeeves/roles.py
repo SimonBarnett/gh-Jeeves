@@ -489,47 +489,71 @@ class JeevesChair:
             self.handled.append(f"resync:{src}:err")
             log.warning("cmd=resync nick=%s err=%s", src, type(e).__name__)
     def _handle_sweep(self, src: str, target: str, text: str) -> None:
-        """FR #52: !sweep [channel] — simon + account simon only; no channel text."""
+        """FR #52 / #107: !sweep [channel] — owner nick + owner account; no channel text."""
+        from .focus import owner_account_name
+
         ch = parse_sweep(text)
         if ch is None:
             return
-        if (src or "").strip().lower() != "simon":
+        owner = owner_account_name()
+        src_l = (src or "").strip().lower()
+        if src_l != owner and not src_l.startswith(f"{owner}-"):
             self.handled.append(f"sweep_denied_nick:{src}")
             return
         if self.mode_grants is None:
             self.handled.append("sweep_no_controller")
             return
-        acct = (self.mode_grants.state.accounts.get("simon") or "").strip().lower()
-        if acct != "simon":
+        acct = (self._account_for_nick(src) or "").strip().lower()
+        if acct != owner:
             self.handled.append("sweep_denied_unauth")
+            self.handled.append(f"sweep_denied_unauth:{src}:account={acct or 'none'}")
             self.mode_grants.state.events.append(f"sweep_denied_unauth:{src}")
+            log.info(
+                "cmd=sweep nick=%s denied account=%s live=True",
+                src,
+                acct or "none",
+            )
             return
         if not ch:
             ch = target if target.startswith("#") else "#bobiverse"
         try:
             self.client.send_raw(f"NAMES {ch}")
+            # FR #107: refresh accounts for nicks already present
+            self.mode_grants.request_who(ch)
         except Exception:
             pass
         known = list(self.mode_grants.state.accounts.keys())
         granted = self.mode_grants.sweep_channel(ch, known)
         self.handled.append(f"sweep:{ch}:{len(granted)}")
 
-    def _simon_account(self) -> str | None:
-        """Services account for simon when mode_grants is wired; else None (tests)."""
+    def _account_for_nick(self, nick: str) -> str | None:
+        """FR #107: services account for *this* nick (not a hard-coded simon key)."""
         if self.mode_grants is None:
             return None
-        return (self.mode_grants.state.accounts.get("simon") or "").strip() or None
+        n = (nick or "").strip().lower()
+        if not n:
+            return None
+        return (self.mode_grants.state.accounts.get(n) or "").strip() or None
+
+    def _simon_account(self) -> str | None:
+        """Deprecated alias — prefer _account_for_nick(sender)."""
+        from .focus import owner_account_name
+
+        return self._account_for_nick(owner_account_name())
 
     def _ops_account_for(self, nick: str) -> str | None:
+        from .focus import owner_account_name
+
         n = (nick or "").strip().lower()
         if self.mode_grants is None:
             return None
-        if n == "simon" or n.startswith("simon-"):
-            return self._simon_account()
+        owner = owner_account_name()
+        if n == owner or n.startswith(f"{owner}-"):
+            return self._account_for_nick(nick)
         # bob-* ops: nick prefix is enough (fleet ear)
         if n.startswith("bob-"):
             return n
-        return (self.mode_grants.state.accounts.get(n) or "").strip() or None
+        return self._account_for_nick(nick)
 
     def _handle_ignore_cmds(self, src: str, text: str) -> bool:
         """FR #75: !ignore / !unignore / !ignored — PM replies only."""
@@ -573,21 +597,24 @@ class JeevesChair:
         return False
 
     def _ignore_mutator_ok(self, src: str) -> bool:
-        """simon needs services account when mode_grants is live; bob-* is ops by nick."""
+        """Owner needs services account when mode_grants is live; bob-* is ops by nick."""
+        from .focus import owner_account_name
+
         src_l = (src or "").strip().lower()
         if src_l.startswith("bob-"):
             return True
-        if src_l == "simon" or src_l.startswith("simon-"):
+        owner = owner_account_name()
+        if src_l == owner or src_l.startswith(f"{owner}-"):
             if self.mode_grants is None:
                 return may_mutate_ignore(src, account=None)
-            acct = (self._ops_account_for(src) or "").strip().lower()
-            return acct == "simon"
+            acct = (self._account_for_nick(src) or "").strip().lower()
+            return acct == owner
         return False
 
     def _focus_mutator_ok(self, src: str) -> bool:
-        """FR #68: simon only; services account when mode_grants live."""
+        """FR #68 / #107: owner nick; services account keyed by *sender* nick."""
         live = self.mode_grants is not None
-        acct = self._simon_account() if live else None
+        acct = self._account_for_nick(src) if live else None
         return may_mutate_focus(src, account=acct, mode_grants_live=live)
 
     def _handle_focus_cmds(self, src: str, text: str) -> bool:
@@ -597,9 +624,16 @@ class JeevesChair:
             if arg is None:
                 arg = ""
             if not self._focus_mutator_ok(src):
-                self._pm(src, "focus: denied (simon account required)")
+                live = self.mode_grants is not None
+                acct = self._account_for_nick(src) if live else None
+                self._pm(src, "focus: denied (owner account required)")
                 self.handled.append(f"focus_denied:{src}")
-                log.info("cmd=focus nick=%s denied", src)
+                log.info(
+                    "cmd=focus nick=%s denied account=%s live=%s",
+                    src,
+                    (acct or "none"),
+                    live,
+                )
                 return True
             lines = handle_focus_cmd(self.home, arg)
             for line in lines:
@@ -612,9 +646,16 @@ class JeevesChair:
             if arg is None:
                 arg = ""
             if not self._focus_mutator_ok(src):
-                self._pm(src, "unfocus: denied (simon account required)")
+                live = self.mode_grants is not None
+                acct = self._account_for_nick(src) if live else None
+                self._pm(src, "unfocus: denied (owner account required)")
                 self.handled.append(f"unfocus_denied:{src}")
-                log.info("cmd=unfocus nick=%s denied", src)
+                log.info(
+                    "cmd=unfocus nick=%s denied account=%s live=%s",
+                    src,
+                    (acct or "none"),
+                    live,
+                )
                 return True
             lines = handle_unfocus_cmd(self.home, arg)
             for line in lines:

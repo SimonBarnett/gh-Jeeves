@@ -747,11 +747,20 @@ def focus_public_list(home: Path) -> list[dict[str, Any]]:
     return out
 
 
+def owner_account_name() -> str:
+    """FR #107: Ergo services account that may !focus / !ignore / !sweep (env override)."""
+    import os
+
+    raw = (os.environ.get("JEEVES_OWNER_ACCOUNT") or "simon").strip().lower()
+    return raw or "simon"
+
+
 def may_mutate_focus(nick: str, *, account: str | None = None, mode_grants_live: bool = False) -> bool:
-    """Only simon (services account when mode_grants live)."""
+    """Only owner nick (simon / simon-*) with matching services account when mode_grants live."""
     n = (nick or "").strip().lower()
-    if n != "simon" and not n.startswith("simon-"):
+    owner = owner_account_name()
+    if n != owner and not n.startswith(f"{owner}-"):
         return False
     if mode_grants_live:
-        return (account or "").strip().lower() == "simon"
+        return (account or "").strip().lower() == owner
     return True
