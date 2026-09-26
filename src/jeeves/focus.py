@@ -1,7 +1,9 @@
-"""FR #68 / #113: !focus priority-sort for !list and Jeeves assign-on-!bored.
+"""FR #68 / #113 / #141: !focus priority-sort for !list and Jeeves assign-on-!bored.
 
 Token-less. One sort feeds list + bored. Ignored repos stay hidden (#75).
 FR #113: item keys ``owner/repo#N`` (or short ``repo#N``) rank ahead of repo focus.
+FR #141: ``!focus strict on|off`` — when on, only item-focused or repo-focused
+jobs are listed/assigned; empty focus → nothing queued.
 """
 
 from __future__ import annotations
@@ -39,7 +41,13 @@ def focus_path(home: Path) -> Path:
 
 
 def empty_focus() -> dict[str, Any]:
-    return {"v": FOCUS_VERSION, "repos": {}, "items": {}, "item_seq": 0}
+    return {
+        "v": FOCUS_VERSION,
+        "repos": {},
+        "items": {},
+        "item_seq": 0,
+        "strict": False,
+    }
 
 
 def _utc_now() -> str:
@@ -183,6 +191,7 @@ def load_focus(home: Path) -> dict[str, Any]:
         doc["item_seq"] = int(doc.get("item_seq") or 0)
     except (TypeError, ValueError):
         doc["item_seq"] = 0
+    doc["strict"] = bool(doc.get("strict"))
     return doc
 
 
@@ -195,11 +204,40 @@ def save_focus(home: Path, doc: dict[str, Any]) -> None:
         "repos": dict(doc.get("repos") or {}),
         "items": dict(doc.get("items") or {}),
         "item_seq": int(doc.get("item_seq") or 0),
+        "strict": bool(doc.get("strict")),
         "updated": doc.get("updated") or _utc_now(),
     }
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def is_strict_focus(home: Path) -> bool:
+    """FR #141: when True, assign/list only focused items/repos."""
+    return bool(load_focus(home).get("strict"))
+
+
+def set_strict_focus(home: Path, enabled: bool) -> bool:
+    """Persist strict mode; returns the new value."""
+    doc = load_focus(home)
+    doc["strict"] = bool(enabled)
+    doc["updated"] = _utc_now()
+    save_focus(home, doc)
+    return bool(doc["strict"])
+
+
+def row_matches_focus(home: Path, row: dict[str, Any]) -> bool:
+    """True if row is item-focused or its repo is in focus.json repos."""
+    if item_rank_for_row(home, row) is not None:
+        return True
+    return repo_priority(home, str(row.get("repo") or "")) is not None
+
+
+def filter_strict_focus_rows(home: Path, rows: list[dict]) -> list[dict]:
+    """When strict is on, keep only focused rows; when off, return rows unchanged."""
+    if not is_strict_focus(home):
+        return list(rows)
+    return [r for r in rows if isinstance(r, dict) and row_matches_focus(home, r)]
 
 
 def _label_for_priority(pr: int) -> str:
@@ -319,11 +357,14 @@ def item_rank_for_row(home: Path, row: dict[str, Any]) -> int | None:
 
 def sort_unaccepted_rows(home: Path, rows: list[dict]) -> list[dict]:
     """
-    Single sort for !list and !bored (FR #113):
+    Single sort for !list and !bored (FR #113 / #141):
+    0) purge closed item focus; when strict, drop unfocused rows
     1) item-focused rows by rank ascending
     2) else repo focus priority ascending
     3) then seq ascending
     """
+    purge_stale_item_focus(home)
+    rows = filter_strict_focus_rows(home, list(rows))
     decorated = []
     for r in rows:
         repo = str(r.get("repo") or "")
@@ -612,9 +653,11 @@ def list_item_focus_entries(home: Path) -> list[tuple[str, int, str]]:
 def format_focus_lines(home: Path) -> list[str]:
     items = list_item_focus_entries(home)
     repos = list_focus_entries(home)
+    strict = is_strict_focus(home)
+    out: list[str] = [f"focus strict: {'on' if strict else 'off'}"]
     if not items and not repos:
-        return ["focus: (none)"]
-    out: list[str] = []
+        out.append("focus: (none)")
+        return out
     if items:
         out.append(f"focus items ({len(items)}):")
         for key, rk, lab in items:
@@ -634,6 +677,19 @@ def handle_focus_cmd(home: Path, arg: str) -> list[str]:
     if not raw:
         return format_focus_lines(home)
     parts = raw.split()
+
+    # FR #141: !focus strict on|off
+    if parts and parts[0].lower() == "strict":
+        if len(parts) == 1:
+            return [f"focus strict: {'on' if is_strict_focus(home) else 'off'}"]
+        flag = parts[1].lower()
+        if flag in ("on", "1", "true", "yes"):
+            set_strict_focus(home, True)
+            return ["focus strict: on"]
+        if flag in ("off", "0", "false", "no"):
+            set_strict_focus(home, False)
+            return ["focus strict: off"]
+        return ["focus: usage !focus strict on|off"]
 
     def _try_item(tok: str, rank: int | None, lab: str | None) -> list[str] | None:
         if normalize_item_ref(tok) is None:
