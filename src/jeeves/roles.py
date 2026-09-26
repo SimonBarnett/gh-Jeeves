@@ -215,6 +215,8 @@ class JeevesChair:
             if self.auto_join_ctrl is not None:
                 self.auto_join_ctrl.handle_raw(line)
             self._handle_quit_raw(line)
+            # FR #105: 353/366 → membership progress for resync orphan gate
+            self._note_names_raw(line)
 
         self.client.on_raw = _on_raw  # type: ignore[method-assign]
         if self.auto_join_ctrl is None and hasattr(self.client, "send_raw"):
@@ -229,6 +231,9 @@ class JeevesChair:
         self.assign_state.bind(self.home)
         # Optional inject for tests: set of live worker nicks
         self.live_seats_override: set[str] | None = None
+        # FR #105: NAMES membership ready for resync orphan release
+        self.membership_ready: bool = False
+        self._names_done_channels: set[str] = set()
 
     def _pm(self, nick: str, text: str) -> None:
         """Private message only (help/list). Never channel flood. Non-blocking (#74)."""
@@ -250,6 +255,46 @@ class JeevesChair:
         if self.mode_grants is not None:
             modes = self.mode_grants.state.modes
         return live_seats_from_modes(modes, shop=shop)
+
+    def connected_worker_nicks(self) -> set[str]:
+        """FR #105: all nicks currently present in shop channels (from NAMES/modes)."""
+        if self.live_seats_override is not None:
+            return set(self.live_seats_override)
+        out: set[str] = set()
+        if self.mode_grants is not None:
+            for _ch, nicks in (self.mode_grants.state.modes or {}).items():
+                if isinstance(nicks, dict):
+                    out.update(str(n) for n in nicks.keys())
+        return out
+
+    def note_names_complete(self, channel: str) -> None:
+        """Call when 353/366 NAMES arrives for a shop; flips membership_ready."""
+        ch = (channel or "").strip().lower()
+        if not ch.startswith("#"):
+            ch = "#" + ch
+        if ch == "#bobiverse":
+            return
+        self._names_done_channels.add(ch)
+        shops = {s.strip().lower() for s in self.shops if s.strip()}
+        if shops and shops.issubset(self._names_done_channels):
+            if not self.membership_ready:
+                self.membership_ready = True
+                self.handled.append("membership_ready")
+        elif not shops and self._names_done_channels:
+            if not self.membership_ready:
+                self.membership_ready = True
+                self.handled.append("membership_ready")
+
+    def _note_names_raw(self, line: str) -> None:
+        """Parse 353 / 366 for FR #105 membership_ready."""
+        import re
+
+        s = (line or "").strip()
+        m = re.match(r"(?i)^:?\S+\s+35[36]\s+\S+\s+[*=@]?\s*(\S+)", s)
+        if not m:
+            m = re.match(r"(?i)^:?\S+\s+366\s+\S+\s+(\S+)", s)
+        if m:
+            self.note_names_complete(m.group(1))
 
     def start(self) -> None:
         self._outbox.start()

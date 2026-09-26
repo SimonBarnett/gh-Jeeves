@@ -329,16 +329,30 @@ def _identity_key(row: dict[str, Any]) -> str:
     return f"{row.get('repo')}|{row.get('id')}"
 
 
+def _idle_worker_entry(doc: dict[str, Any], nick: str) -> None:
+    """FR #105: drop worker entry when releasing its accepted row (both views)."""
+    nick_s = str(nick or "").strip()
+    if not nick_s:
+        return
+    workers = doc.setdefault("workers", {})
+    if isinstance(workers, dict):
+        workers.pop(nick_s, None)
+
+
 def reconcile_queue(
     home: Path,
     desired: list[dict[str, Any]],
     *,
     connected_nicks: set[str] | None = None,
+    release_orphans: bool = True,
 ) -> DiffStats:
     """
     Merge desired outstanding into queue.json.
-    Keep accepted rows whose nick is still connected; else release to unaccepted
-    if still outstanding, or drop if GitHub says finished.
+
+    FR #105: when ``release_orphans`` is False (boot / pre-NAMES / pre-grace),
+    keep every accepted row — still add/remove/retype unaccepted from GitHub.
+    When True, keep accepted only if nick ∈ connected_nicks; else release and
+    idle that nick in ``workers``.
     """
     connected_nicks = connected_nicks or set()
     doc = load_queue(home)
@@ -370,6 +384,28 @@ def reconcile_queue(
         key = _row_key(row)
         ident = _identity_key(row)
         still_out = key in desired_by_key or ident in desired_by_ident
+        # FR #105: hold all accepted until membership+grace allows orphan release
+        if not release_orphans:
+            if still_out and ident in desired_by_ident and str(row.get("task")) != str(
+                desired_by_ident[ident].get("task")
+            ):
+                row = {
+                    **row,
+                    **{
+                        k: desired_by_ident[ident][k]
+                        for k in ("task", "line", "url", "seq")
+                        if k in desired_by_ident[ident]
+                    },
+                }
+                stats.retyped += 1
+            new_accepted.append(row)
+            stats.accepted_kept += 1
+            stats.kept += 1
+            desired_by_key.pop(_row_key(row), None)
+            if _identity_key(row) in desired_by_ident:
+                d = desired_by_ident[_identity_key(row)]
+                desired_by_key.pop(_row_key(d), None)
+            continue
         if nick and nick in connected_nicks and still_out:
             # refresh task type from GitHub if retyped
             if ident in desired_by_ident and str(row.get("task")) != str(desired_by_ident[ident].get("task")):
@@ -387,6 +423,7 @@ def reconcile_queue(
             continue
         if nick and nick not in connected_nicks:
             stats.accepted_released += 1
+            _idle_worker_entry(doc, nick)
             if still_out:
                 # back to unaccepted with GitHub shape
                 src = desired_by_ident.get(ident) or desired_by_key.get(key)
@@ -477,9 +514,12 @@ def run_resync(
     connected_nicks: set[str] | None = None,
     outbox_append: Callable[[str], None] | None = None,
     quiet_when_unchanged: bool = True,
+    release_orphans: bool = True,
 ) -> DiffStats:
     """
     Full resync. On GitHub failure: keep queue.json, mark skipped, do not wipe.
+
+    FR #105: ``release_orphans=False`` keeps accepted through boot/pre-NAMES.
     """
     cfg = cfg or ResyncConfig()
     home = Path(home)
@@ -525,7 +565,25 @@ def run_resync(
         sort_keys=True,
     )
 
-    stats = reconcile_queue(home, desired, connected_nicks=connected_nicks)
+    stats = reconcile_queue(
+        home,
+        desired,
+        connected_nicks=connected_nicks,
+        release_orphans=release_orphans,
+    )
+    # FR #105 / #79: mirror worker idle into digest machines.*.workers
+    if stats.accepted_released:
+        try:
+            from .digest import load_digest, mirror_top_worker_to_machine, save_digest
+
+            dig = load_digest(home)
+            q = load_queue(home)
+            for nick, ent in list((q.get("workers") or {}).items()):
+                if isinstance(ent, dict):
+                    mirror_top_worker_to_machine(dig, str(nick), ent)
+            save_digest(home, dig)
+        except Exception:
+            pass
     after = load_queue(home)
     after_snap = json.dumps(
         {
@@ -570,6 +628,10 @@ def apply_webhook_during_resync(home: Path, claim: Claim) -> str:
     return apply_queue_event(home, claim)
 
 
+# FR #105: default orphan-release grace after boot (seconds)
+DEFAULT_ORPHAN_GRACE_S = 600.0
+
+
 class ResyncScheduler:
     """Start + periodic resync; on-demand trigger."""
 
@@ -580,17 +642,30 @@ class ResyncScheduler:
         *,
         cfg: ResyncConfig | None = None,
         connected_nicks_fn: Callable[[], set[str]] | None = None,
+        membership_ready_fn: Callable[[], bool] | None = None,
+        orphan_grace_s: float = DEFAULT_ORPHAN_GRACE_S,
         outbox_append: Callable[[str], None] | None = None,
     ):
         self.home = Path(home)
         self.client = client
         self.cfg = cfg or ResyncConfig()
         self.connected_nicks_fn = connected_nicks_fn or (lambda: set())
+        # FR #105: NAMES/membership ready; until True + grace, hold accepted
+        self.membership_ready_fn = membership_ready_fn or (lambda: False)
+        self.orphan_grace_s = float(orphan_grace_s)
         self.outbox_append = outbox_append
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last: DiffStats | None = None
         self.runs = 0
+        self._boot_ts = time.time()
+
+    def orphan_release_allowed(self, *, now: float | None = None) -> bool:
+        """True only after membership ready AND boot grace (whichever later)."""
+        now_f = time.time() if now is None else float(now)
+        if not bool(self.membership_ready_fn()):
+            return False
+        return (now_f - float(self._boot_ts)) >= float(self.orphan_grace_s)
 
     def run_once(self) -> DiffStats:
         import logging
@@ -599,12 +674,15 @@ class ResyncScheduler:
 
         log = logging.getLogger("jeeves.resync")
         slog(log, "resync_start", run=self.runs + 1)
+        release = self.orphan_release_allowed()
+        nicks = self.connected_nicks_fn() if release else set()
         self.last = run_resync(
             self.home,
             self.client,
             cfg=self.cfg,
-            connected_nicks=self.connected_nicks_fn(),
+            connected_nicks=nicks,
             outbox_append=self.outbox_append,
+            release_orphans=release,
         )
         self.runs += 1
         st = self.last
@@ -617,6 +695,8 @@ class ResyncScheduler:
             retyped=getattr(st, "retyped", 0),
             total=getattr(st, "total", 0),
             skipped=getattr(st, "skipped", False),
+            release_orphans=release,
+            accepted_released=getattr(st, "accepted_released", 0),
         )
         return self.last
 
@@ -695,9 +775,11 @@ def build_resync_scheduler(
     jeeves_home: Path | None = None,
     outbox_append: Callable[[str], None] | None = None,
     connected_nicks_fn: Callable[[], set[str]] | None = None,
+    membership_ready_fn: Callable[[], bool] | None = None,
+    orphan_grace_s: float = DEFAULT_ORPHAN_GRACE_S,
 ) -> ResyncScheduler | None:
     """
-    Wire resync for the Windows service (FR #49).
+    Wire resync for the Windows service (FR #49 / #105).
 
     Returns None only when ``JEEVES_RESYNC_DISABLE`` is set.
     Raises ``ResyncConfigError`` if resync is enabled and no token/client.
@@ -749,6 +831,8 @@ def build_resync_scheduler(
         gh,
         cfg=cfg,
         connected_nicks_fn=connected_nicks_fn,
+        membership_ready_fn=membership_ready_fn,
+        orphan_grace_s=orphan_grace_s,
         outbox_append=_append,
     )
 

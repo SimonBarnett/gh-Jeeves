@@ -400,6 +400,10 @@ def main(argv: list[str] | None = None) -> int:
             if client is not None and "client" in inspect.signature(_JC.__init__).parameters:
                 chair_kwargs["client"] = client
             chair = _JC(**chair_kwargs)
+            # FR #105: bind real NAMES membership before start resync runs
+            if sched is not None:
+                sched.connected_nicks_fn = chair.connected_worker_nicks
+                sched.membership_ready_fn = lambda: bool(chair.membership_ready)
             chair.start()
             print(
                 f"INFO chair nick={args.nick} host={host}:{port} shops={shops} digest={dh} "
