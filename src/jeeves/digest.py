@@ -256,6 +256,10 @@ def coerce_workers(mid: str, raw: Any) -> dict[str, Any]:
                 "working_on": str(job or "") if state.lower() == "busy" else str(e.get("working_on") or ""),
                 "ts": str(e.get("ts") or ""),
             }
+            # FR #161: preserve structured task fields through coerce
+            for k in ("repo", "kind", "id", "ref", "title"):
+                if e.get(k) is not None:
+                    out[key_s][k] = e.get(k)
             if e.get("channel") is not None:
                 out[key_s]["channel"] = e.get("channel")
             if e.get("nick"):
@@ -283,6 +287,10 @@ def coerce_workers(mid: str, raw: Any) -> dict[str, Any]:
             "agent": str(e.get("agent") or ""),
             "model": str(e.get("model") or ""),
         }
+        # FR #161: keep structured task fields when ear pid rows carry them
+        for k in ("repo", "id", "ref", "title"):
+            if e.get(k) is not None:
+                out[nick][k] = e.get(k)
     return nick_keyed_machine_workers(out)
 
 
@@ -344,6 +352,75 @@ def prune_machine_worker_ghosts(doc: dict[str, Any]) -> None:
         machines[mid] = ent
 
 
+def _norm_task_ident(ident: Any) -> str:
+    s = str(ident or "").strip()
+    if not s:
+        return ""
+    if s.startswith("#"):
+        return s
+    if s.isdigit():
+        return f"#{s}"
+    return s
+
+
+def worker_task_title(row: dict[str, Any] | None) -> str:
+    """Title from queue row (`title` or announce `line`)."""
+    if not isinstance(row, dict):
+        return ""
+    return str(row.get("title") or row.get("line") or "").strip()[:200]
+
+
+def worker_busy_entry(
+    *,
+    repo: str,
+    kind: str,
+    ident: str,
+    title: str = "",
+    channel: str = "",
+    job: str | None = None,
+    ts: str | None = None,
+) -> dict[str, Any]:
+    """FR #161: deterministic busy shape for digest/queue workers."""
+    repo_s = str(repo or "").strip()
+    kind_s = str(kind or "").strip().upper() or "FR"
+    if kind_s == "PR":
+        kind_s = "FR"
+    id_s = _norm_task_ident(ident)
+    num = id_s.lstrip("#")
+    ref = f"{repo_s}#{num}" if repo_s and num else (repo_s or id_s)
+    job_s = job if job is not None else f"{repo_s} {kind_s} {id_s}".strip()
+    return {
+        "state": "busy",
+        "job": job_s,
+        "working_on": job_s,
+        "repo": repo_s,
+        "kind": kind_s,
+        "id": id_s,
+        "ref": ref,
+        "title": str(title or "").strip()[:200],
+        "channel": str(channel or ""),
+        "ts": ts or _utc_now(),
+    }
+
+
+def worker_idle_entry(*, ts: str | None = None, channel: str = "") -> dict[str, Any]:
+    """FR #161: idle clears task fields; nothing resurrected until next ACK."""
+    ent: dict[str, Any] = {
+        "state": "idle",
+        "job": None,
+        "working_on": "",
+        "repo": None,
+        "kind": None,
+        "id": None,
+        "ref": None,
+        "title": None,
+        "ts": ts or _utc_now(),
+    }
+    if channel:
+        ent["channel"] = channel
+    return ent
+
+
 def mirror_top_worker_to_machine(
     doc: dict[str, Any],
     nick: str,
@@ -351,7 +428,7 @@ def mirror_top_worker_to_machine(
     *,
     remove: bool = False,
 ) -> bool:
-    """FR #79 / #162: lockstep machines.<machine>.workers[nick] with top-level workers.
+    """FR #79 / #161 / #162: lockstep machines.<machine>.workers[nick] with top-level workers.
 
     One nick-keyed entry per present worker (no pid ghost twin). FR #13 / K12:
     also refresh machines.<id>.working_on so TipForm shows busy while hidden
@@ -381,18 +458,27 @@ def mirror_top_worker_to_machine(
         workers.pop(n, None)
         workers.pop(str(pid), None)  # drop legacy pid ghost if present
     else:
-        job = entry.get("job")
-        if job is None:
-            job = entry.get("working_on")
-        state = str(entry.get("state") or "idle")
-        slot = {
-            "state": state,
-            "job": job,
-            "working_on": str(job or "") if state.lower() == "busy" else "",
-            "ts": str(entry.get("ts") or _utc_now()),
-        }
-        if entry.get("channel") is not None:
-            slot["channel"] = entry.get("channel")
+        state = str(entry.get("state") or "idle").lower()
+        if state == "idle":
+            slot = worker_idle_entry(
+                ts=str(entry.get("ts") or "") or None,
+                channel=str(entry.get("channel") or ""),
+            )
+        else:
+            job = entry.get("job")
+            if job is None:
+                job = entry.get("working_on")
+            slot = {
+                "state": "busy",
+                "job": job,
+                "working_on": str(job or "") if job else str(entry.get("working_on") or ""),
+                "ts": str(entry.get("ts") or _utc_now()),
+            }
+            for k in ("repo", "kind", "id", "ref", "title", "channel"):
+                if entry.get(k) is not None:
+                    slot[k] = entry.get(k)
+            if entry.get("channel") is not None:
+                slot["channel"] = entry.get("channel")
         workers[n] = slot
         # FR #162: never write pid ghost twin
         workers.pop(str(pid), None)
@@ -542,11 +628,34 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
         nick = str(payload.get("nick") or "")
         if nick:
             q = load_queue(home)
-            ent = {
-                "state": str(payload.get("state") or "idle"),
-                "job": payload.get("job"),
-                "ts": payload.get("ts") or _utc_now(),
-            }
+            state = str(payload.get("state") or "idle").lower()
+            if state == "idle":
+                ent = worker_idle_entry(ts=str(payload.get("ts") or "") or None)
+            else:
+                repo = str(payload.get("repo") or "")
+                kind = str(payload.get("task") or payload.get("kind") or "")
+                ident = str(payload.get("id") or payload.get("ident") or "")
+                title = str(payload.get("title") or "")
+                if not title and isinstance(payload.get("accepted_row"), dict):
+                    title = worker_task_title(payload.get("accepted_row"))  # type: ignore[arg-type]
+                if repo and (kind or ident):
+                    ent = worker_busy_entry(
+                        repo=repo,
+                        kind=kind or "FR",
+                        ident=ident,
+                        title=title,
+                        channel=str(payload.get("channel") or ""),
+                        job=payload.get("job") if payload.get("job") is not None else None,
+                        ts=str(payload.get("ts") or "") or None,
+                    )
+                else:
+                    # Legacy busy: job string only
+                    ent = {
+                        "state": "busy",
+                        "job": payload.get("job"),
+                        "working_on": str(payload.get("job") or ""),
+                        "ts": payload.get("ts") or _utc_now(),
+                    }
             q.setdefault("workers", {})[nick] = ent
             from .queue import save_queue
 
@@ -588,11 +697,28 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
             ]
             q.setdefault("accepted", []).append(row)
         if nick:
-            ent = {
-                "state": str(payload.get("state") or "busy"),
-                "job": payload.get("job"),
-                "ts": payload.get("ts") or _utc_now(),
-            }
+            row_d = row if isinstance(row, dict) else {}
+            repo = str(payload.get("repo") or row_d.get("repo") or "")
+            kind = str(payload.get("task") or payload.get("kind") or row_d.get("task") or "FR")
+            ident = str(payload.get("id") or row_d.get("id") or "")
+            title = str(payload.get("title") or "") or worker_task_title(row_d)
+            if repo and ident:
+                ent = worker_busy_entry(
+                    repo=repo,
+                    kind=kind,
+                    ident=ident,
+                    title=title,
+                    channel=str(payload.get("channel") or row_d.get("channel") or ""),
+                    job=payload.get("job") if payload.get("job") is not None else None,
+                    ts=str(payload.get("ts") or "") or None,
+                )
+            else:
+                ent = {
+                    "state": str(payload.get("state") or "busy"),
+                    "job": payload.get("job"),
+                    "working_on": str(payload.get("job") or ""),
+                    "ts": payload.get("ts") or _utc_now(),
+                }
             q.setdefault("workers", {})[nick] = ent
             mirror_top_worker_to_machine(doc, nick, ent)
         save_queue(home, q)
@@ -613,11 +739,7 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
         q = load_queue(home)
         nick = str(payload.get("nick") or "")
         if nick:
-            ent = {
-                "state": "idle",
-                "job": None,
-                "ts": payload.get("ts") or _utc_now(),
-            }
+            ent = worker_idle_entry(ts=str(payload.get("ts") or "") or None)
             q.setdefault("workers", {})[nick] = ent
             save_queue(home, q)
             doc["queue"]["workers"] = q["workers"]

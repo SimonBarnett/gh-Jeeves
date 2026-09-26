@@ -795,13 +795,19 @@ def _mark_worker_busy(
     task_u: str,
     ident: str,
     channel_s: str,
+    title: str = "",
 ) -> None:
-    doc.setdefault("workers", {})[nick_s] = {
-        "state": "busy",
-        "job": f"{repo} {task_u} {ident}",
-        "channel": channel_s,
-        "ts": _utc_now(),
-    }
+    # FR #161: structured busy fields (repo / kind / ref / title) + legacy job string
+    from .digest import worker_busy_entry
+
+    id_s = _norm_ident(ident)
+    doc.setdefault("workers", {})[nick_s] = worker_busy_entry(
+        repo=repo,
+        kind=task_u,
+        ident=id_s,
+        title=title,
+        channel=channel_s,
+    )
 
 
 def _same_machine_nicks(a: str, b: str) -> bool:
@@ -849,9 +855,18 @@ def _accept_job_locked(
     nick_s = str(nick or "").strip()
     channel_s = str(channel or "").strip()
 
-    def _busy() -> None:
+    def _busy(row: dict[str, Any] | None = None) -> None:
+        title = ""
+        if isinstance(row, dict):
+            title = str(row.get("title") or row.get("line") or "")
         _mark_worker_busy(
-            doc, nick_s, repo=repo, task_u=task_u, ident=ident, channel_s=channel_s
+            doc,
+            nick_s,
+            repo=repo,
+            task_u=task_u,
+            ident=ident,
+            channel_s=channel_s,
+            title=title,
         )
 
     # Already accepted by this nick?
@@ -865,7 +880,7 @@ def _accept_job_locked(
             row["task"] = "FR" if tasks_equivalent(row.get("task"), "FR") else str(row.get("task") or task_u).upper()
             if str(row.get("task") or "").upper() == "PR":
                 row["task"] = "FR"
-            _busy()
+            _busy(row)
             save_queue(home, doc)
             return "accepted", row
 
@@ -887,7 +902,7 @@ def _accept_job_locked(
                 row["task"] = "FR"
             # Drop departed holder from workers.
             doc.setdefault("workers", {}).pop(holder, None)
-            _busy()
+            _busy(row)
             save_queue(home, doc)
             return "accepted", row
 
@@ -928,7 +943,7 @@ def _accept_job_locked(
     doc["accepted"].append(match)
     if len(doc["accepted"]) > ACCEPTED_CAP:
         doc["accepted"] = doc["accepted"][-ACCEPTED_CAP:]
-    _busy()
+    _busy(match)
     save_queue(home, doc)
     return "accepted", match
 
@@ -1031,8 +1046,10 @@ def _complete_job_locked(
                 mode_mismatch = True
                 break
     if match is None:
-        # still allow DONE to clear busy if row missing
-        doc["workers"][nick_s] = {"state": "idle", "ts": _utc_now()}
+        # still allow DONE to clear busy if row missing (FR #161: clear task fields)
+        from .digest import worker_idle_entry
+
+        doc["workers"][nick_s] = worker_idle_entry()
         save_queue(home, doc)
         return "no_match", None
     if mode_mismatch:
@@ -1054,7 +1071,9 @@ def _complete_job_locked(
     doc["done"].append(match)
     if len(doc["done"]) > DONE_CAP:
         doc["done"] = doc["done"][-DONE_CAP:]
-    doc["workers"][nick_s] = {"state": "idle", "ts": _utc_now()}
+    from .digest import worker_idle_entry
+
+    doc["workers"][nick_s] = worker_idle_entry()
     queued_task_u = str(
         match.get("queued_task") or match.get("task") or task_u
     ).upper()
