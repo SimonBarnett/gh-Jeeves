@@ -272,15 +272,21 @@ class JeevesChair:
         ch = (channel or "").strip().lower()
         if not ch.startswith("#"):
             ch = "#" + ch
+        # Announce channel is not a shop for orphan-release readiness.
         if ch == "#bobiverse":
             return
         self._names_done_channels.add(ch)
-        shops = {s.strip().lower() for s in self.shops if s.strip()}
+        shops = {
+            s.strip().lower()
+            for s in self.shops
+            if s.strip() and s.strip().lower() != "#bobiverse"
+        }
         if shops and shops.issubset(self._names_done_channels):
             if not self.membership_ready:
                 self.membership_ready = True
                 self.handled.append("membership_ready")
         elif not shops and self._names_done_channels:
+            # shops empty or only #bobiverse — any shop NAMES is enough
             if not self.membership_ready:
                 self.membership_ready = True
                 self.handled.append("membership_ready")
