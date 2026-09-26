@@ -118,6 +118,10 @@ def _log_announce_line(text: str) -> None:
     log.info("event=announce repo=%s#%s mode=%s", repo, num, mode)
 
 
+# FR #110: hold accepted claim after QUIT so routine reconnects do not drop work
+DEFAULT_QUIT_REJOIN_GRACE_S = 120.0
+
+
 class JeevesChair:
     """
     Drains chair-outbox to #bobiverse; ACK/DONE listener in shops.
@@ -140,6 +144,7 @@ class JeevesChair:
         channel_denylist: list[str] | None = None,
         list_interval_s: float = 60.0,
         replay_outbox: bool = False,
+        quit_rejoin_grace_s: float = DEFAULT_QUIT_REJOIN_GRACE_S,
     ):
         self.home = Path(home)
         self.report_url = report_url.rstrip("/")
@@ -215,6 +220,7 @@ class JeevesChair:
             if self.auto_join_ctrl is not None:
                 self.auto_join_ctrl.handle_raw(line)
             self._handle_quit_raw(line)
+            self._handle_join_raw(line)
             # FR #105: 353/366 → membership progress for resync orphan gate
             self._note_names_raw(line)
 
@@ -234,6 +240,9 @@ class JeevesChair:
         # FR #105: NAMES membership ready for resync orphan release
         self.membership_ready: bool = False
         self._names_done_channels: set[str] = set()
+        # FR #110: nick -> quit timestamp (hold release until grace or rejoin)
+        self.quit_rejoin_grace_s = float(quit_rejoin_grace_s)
+        self._pending_quits: dict[str, float] = {}
 
     def _pm(self, nick: str, text: str) -> None:
         """Private message only (help/list). Never channel flood. Non-blocking (#74)."""
@@ -866,7 +875,7 @@ class JeevesChair:
         )
 
     def _handle_quit_raw(self, line: str) -> None:
-        """FR #102: on QUIT, release that nick's accepted jobs + workers entry."""
+        """FR #110: on QUIT, hold claim for rejoin grace (do not release immediately)."""
         # :nick!user@host QUIT :reason
         raw = (line or "").strip()
         if " QUIT" not in raw.upper():
@@ -881,24 +890,83 @@ class JeevesChair:
 
         if not is_worker_nick(nick):
             return
-        released = release_worker(self.home, nick, reason="quit")
-        self.handled.append(f"quit_release:{nick}:{len(released)}")
-        log.info("event=quit_release nick=%s released=%s", nick, len(released))
-        try:
-            from .nicks import parse_worker_nick
+        # Hold — routine Ergo reconnects (~2s) must not drop in-flight ACK work
+        self._pending_quits[nick] = time.time()
+        self.handled.append(f"quit_hold:{nick}")
+        log.info(
+            "event=quit_hold nick=%s grace_s=%s",
+            nick,
+            self.quit_rejoin_grace_s,
+        )
 
-            parsed = parse_worker_nick(nick)
-            payload = {"op": "delete-worker", "nick": nick}
-            if parsed:
-                payload["machine"] = parsed[0]
-                payload["pid"] = parsed[1]
-            self._post_report(payload)
-        except Exception as e:
-            log.warning("quit_release_report_err nick=%s err=%s", nick, type(e).__name__)
+    def _handle_join_raw(self, line: str) -> None:
+        """FR #110: JOIN within grace cancels pending quit release (same nick or machine)."""
+        raw = (line or "").strip()
+        if " JOIN " not in raw.upper() and not raw.upper().endswith(" JOIN"):
+            # :nick!u@h JOIN #chan
+            if " JOIN" not in raw.upper():
+                return
+        if not raw.startswith(":"):
+            return
+        prefix = raw[1:].split(" ", 1)[0]
+        nick = prefix.split("!", 1)[0].strip()
+        if not nick:
+            return
+        from .nicks import is_worker_nick, parse_worker_nick
+
+        if not is_worker_nick(nick):
+            return
+        # Cancel exact nick
+        if nick in self._pending_quits:
+            self._pending_quits.pop(nick, None)
+            self.handled.append(f"quit_rejoin:{nick}")
+            log.info("event=quit_rejoin nick=%s", nick)
+            return
+        # Same machine, different pid — cancel pending for that machine
+        parsed = parse_worker_nick(nick)
+        if not parsed:
+            return
+        machine, _pid = parsed
+        cancelled = [
+            n
+            for n in list(self._pending_quits.keys())
+            if (parse_worker_nick(n) or (None, None))[0] == machine
+        ]
+        for n in cancelled:
+            self._pending_quits.pop(n, None)
+            self.handled.append(f"quit_rejoin:{n}:via:{nick}")
+            log.info("event=quit_rejoin nick=%s via=%s", n, nick)
+
+    def _flush_quit_holds(self, *, now: float | None = None) -> None:
+        """Release accepted jobs for nicks whose QUIT grace has elapsed."""
+        now_f = time.time() if now is None else float(now)
+        grace = float(self.quit_rejoin_grace_s)
+        due = [n for n, ts in list(self._pending_quits.items()) if (now_f - float(ts)) >= grace]
+        for nick in due:
+            self._pending_quits.pop(nick, None)
+            released = release_worker(self.home, nick, reason="quit")
+            self.handled.append(f"quit_release:{nick}:{len(released)}")
+            log.info("event=quit_release nick=%s released=%s", nick, len(released))
+            try:
+                from .nicks import parse_worker_nick
+
+                parsed = parse_worker_nick(nick)
+                payload = {"op": "delete-worker", "nick": nick}
+                if parsed:
+                    payload["machine"] = parsed[0]
+                    payload["pid"] = parsed[1]
+                self._post_report(payload)
+            except Exception as e:
+                log.warning("quit_release_report_err nick=%s err=%s", nick, type(e).__name__)
 
     def _sweep_stale_workers(self) -> None:
-        """Periodic FR #102 stale sweep + FR #106 offer timeout."""
+        """Periodic FR #102 stale sweep + FR #106 offer timeout + FR #110 quit grace."""
         now = time.time()
+        # Flush quit holds more often than the 60s stale sweep
+        try:
+            self._flush_quit_holds(now=now)
+        except Exception as e:
+            log.warning("quit_flush_err=%s", type(e).__name__)
         if now - float(getattr(self, "_last_stale_sweep", 0.0) or 0.0) < 60.0:
             return
         self._last_stale_sweep = now
