@@ -20,6 +20,11 @@ DEFAULT_STALE_WORKER_S = 1800.0
 _CLOSES_RE = re.compile(
     r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s+#(\d+)\b",
 )
+# FR #134: DONE … https://github.com/owner/repo/pull/N → supersede FR by MRB.
+_PR_URL_RE = re.compile(
+    r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)",
+    re.I,
+)
 
 # Log-once set for no-match ACK reasons (cleared in tests).
 _ack_no_match_logged: set[str] = set()
@@ -415,6 +420,36 @@ def _linked_ids(claim: Claim) -> tuple[str, ...]:
     return tuple(refs)
 
 
+def pr_ref_from_url(url: str) -> tuple[str, str] | None:
+    """Return (owner/repo, #n) for a GitHub pull URL, else None (FR #134)."""
+    m = _PR_URL_RE.search(url or "")
+    if not m:
+        return None
+    return _norm_repo(m.group(1)), _norm_ident(m.group(2))
+
+
+def _mrb_row_links_fr(row: dict, repo: str, fr_id: str) -> bool:
+    if _norm_repo(str(row.get("repo") or "")) != _norm_repo(repo):
+        return False
+    if str(row.get("task") or "").upper() != "MRB":
+        return False
+    fr = _norm_ident(fr_id)
+    refs = [_norm_ident(x) for x in (row.get("refs") or [])]
+    if fr in refs:
+        return True
+    linked = extract_closes_issue_ids(str(row.get("line") or ""))
+    return fr in linked
+
+
+def fr_superseded_by_open_mrb(doc: dict, repo: str, fr_id: str) -> bool:
+    """True when unaccepted/accepted MRB already tracks this FR (FR #134)."""
+    for bucket in ("unaccepted", "accepted"):
+        for row in doc.get(bucket) or []:
+            if _mrb_row_links_fr(row, repo, fr_id):
+                return True
+    return False
+
+
 def _remove_tasks_for_ids(
     doc: dict,
     repo: str,
@@ -484,6 +519,11 @@ def apply_queue_event(home: Path, claim: Claim) -> str:
         return f"removed:{n}"
 
     if task == "FR":
+        # FR #134: open MRB that links this issue keeps FR out of the offerable queue.
+        if fr_superseded_by_open_mrb(doc, repo, ident):
+            _remove_tasks_for_ids(doc, repo, (ident,), {"FR", "PR", "UAT"})
+            save_queue(home, doc)
+            return "skipped:FR:superseded_by_mrb"
         # Reopened/opened FR: drop stale UAT/PR for same id; enqueue FR (idempotent).
         _remove_tasks_for_ids(doc, repo, (ident,), {"UAT", "PR"})
         # de-dupe prior FR same id
@@ -899,6 +939,26 @@ def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result
             url=url or str(match.get("url") or ""),
         )
     save_queue(home, doc)
+    # FR #134: DONE FR with a PR URL → drop FR from offerable queue; enqueue MRB; focus follows.
+    if tasks_equivalent(task_u, "FR") and url:
+        pr_hit = pr_ref_from_url(url)
+        if pr_hit:
+            pr_repo, pr_id = pr_hit
+            use_repo = repo or pr_repo
+            apply_queue_event(
+                home,
+                Claim(
+                    repo=use_repo,
+                    task="MRB",
+                    id=pr_id,
+                    event="done_supersede",
+                    action="done_fr_pr",
+                    line=f"MRB {pr_id} after DONE FR {ident} Closes {ident}",
+                    url=url,
+                    refs=(ident,),
+                    pr_id=pr_id,
+                ),
+            )
     return "done", match
 
 
