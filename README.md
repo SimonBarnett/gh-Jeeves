@@ -124,22 +124,21 @@ stateDiagram-v2
 
 *Caption: the queue holds only the current task per piece of work, and each GitHub event replaces it deterministically.*
 
-### Shop claim: !bored → offer → ACK
+### Shop claim: !bored → Jeeves assign → ACK (FR #106)
 
 ```mermaid
 sequenceDiagram
   participant W as worker (#machine)
-  participant E as bob-machine ear
+  participant J as Jeeves
   participant Q as webhook queue
-  participant J as Jeeves (silent)
-  W->>E: !bored (idle > 2 min)
-  E->>Q: read top unaccepted
-  E->>W: offer addressed to nick
-  W->>E: ACK TYPE repo#n
-  J-->>Q: mark accepted
+  W->>J: !bored (idle / monitor)
+  J->>Q: pick next unaccepted
+  J->>W: nick: TYPE repo#n url
+  W->>J: ACK TYPE repo#n
+  J-->>Q: mark accepted + busy
 ```
 
-*Caption: the ear offers and the worker ACKs in #machine, while Jeeves only listens and records the acceptance.*
+*Caption: Jeeves assigns on !bored; the worker ACKs in #machine (ear OFFER retired).*
 
 ### ACK/DONE → webhook busy/idle
 

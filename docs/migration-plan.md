@@ -47,7 +47,7 @@ Re-enable task `BobJeeves-chair` on the tagged legacy checkout. The queue format
    - `GET https://irc.ntsa.uk/bob/v1/report`: Jeeves `lastSeen` is fresh.
    - The ear on the test machine and one worker seat are configured with **no token pools**, and the worker is a scripted fake that replies ACK and DONE.
 2. On a sandbox repo with the Bob hook, open issue "smoke &lt;timestamp&gt;". Expect `GIT issues &lt;repo&gt; opened #n` on #bobiverse (ionos `~\.agentic-irc-bobiverse\irc.log`) and `FR #n` in `queue.unaccepted`.
-3. The worker sends `!bored` in `#{machine}`. Expect the ear's `OFFER FR &lt;repo&gt;#n` addressed to that nick.
+3. The worker/monitor sends `!bored` in `#{machine}`. Expect Jeeves assign: `&lt;nick&gt;: FR &lt;repo&gt;#n &lt;url&gt;` (FR #106).
 4. The worker sends `ACK FR &lt;repo&gt;#n`. Expect the row in `queue.accepted` and the worker busy in `machines.&lt;id&gt;.workers`.
 5. Open a PR with `Closes #n`. Expect `FR #n` to be replaced by `MRB #pr`.
 6. The worker sends `DONE FR &lt;repo&gt;#n PR &lt;url&gt;`. Expect the worker idle and the row done.

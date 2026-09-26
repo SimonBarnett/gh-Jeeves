@@ -14,10 +14,10 @@ Disable **every** LLM or token pool: no Grok, no Cursor, no OpenRouter, no Sand,
 
 1. A GitHub event (issue opened or reopened; PR opened, merged or closed unmerged) is POSTed to the Bob GIT webhook.
 2. **Jeeves** announces a `GIT …` line on **#bobiverse** and updates the task queue, applying the **supersede** rules (section 7).
-3. A worker that has been idle for more than 2 minutes sends **`!bored`** in **its own `#{machine}`**.
-4. The **bob-{machine} ear** offers the top unaccepted job addressed to that worker nick in `#{machine}`.
-5. The worker sends **`ACK <TYPE> <owner/repo>#<n>`** in `#{machine}`.
-6. **Jeeves** (a silent listener in `#{machine}`) marks the job **accepted** and sets that worker **busy** on the digest webhook.
+3. A worker that has been idle for more than 2 minutes sends **`!bored`** in **its own `#{machine}`** (monitor-owned for watch seats; model never posts `!bored`).
+4. **Jeeves assigns** the next unaccepted job to that nick in `#{machine}` (FR #106; ear OFFER path retired): one line `<nick>: <TYPE> <owner/repo>#<n> <url>`.
+5. The worker sends **`ACK <TYPE> <owner/repo>#<n>`** in `#{machine}` (line starts with `ACK`; no nick prefix on outbox).
+6. **Jeeves** marks the job **accepted** and sets that worker **busy** on the digest webhook.
 7. The worker does the task. This is the **only** step where AI is allowed.
 8. The worker sends **`DONE <TYPE> <owner/repo>#<n> <result> <url>`** in `#{machine}`.
 9. **Jeeves** marks the job **done**, sets the worker **idle** on the webhook and applies **supersede** (for example, FR done with PR → MRB of the PR is queued).
@@ -27,20 +27,20 @@ Disable **every** LLM or token pool: no Grok, no Cursor, no OpenRouter, no Sand,
   - Every step produces its expected wire line or state change within a bounded time.
   - `queue.json` and webhook state match the expected snapshot after each step.
   - A process-level guard proves no network call to any LLM or token endpoint happened (for example, the env for all AI keys is unset and any outbound HTTP except loopback fails the test).
-- **G2: live smoke test (manual, after deploy; procedure in section 16.3).** Use a throwaway issue on a sandbox repo, with ears and workers configured with no token pools. Watch the announce, the queue row, `!bored`, the offer, ACK, busy, DONE, idle and supersede, using `irc.log` plus `GET https://irc.ntsa.uk/bob/v1/report`.
+- **G2: live smoke test (manual, after deploy; procedure in section 16.3).** Use a throwaway issue on a sandbox repo, with workers configured with no token pools. Watch the announce, the queue row, `!bored`, Jeeves assign, ACK, busy, DONE, idle and supersede, using `irc.log` plus `GET https://irc.ntsa.uk/bob/v1/report`.
 - A gh-Jeeves release is **not** shippable unless G1 is green and G2 has been run and recorded.
 
 ```mermaid
 flowchart LR
   E[GitHub event] --> J[Jeeves announce + queue]
   J --> B["worker !bored in #machine"]
-  B --> O[bob-machine ear offer]
+  B --> O["Jeeves assigns nick: TYPE repo#n url"]
   O --> A[worker ACK]
   A --> W[Jeeves: accepted + busy]
   W --> D[worker DONE]
   D --> S[Jeeves: done + idle + supersede]
 ```
-*Caption: the token-less chain that the acceptance gate proves. Every box is a script except the worker's own work between ACK and DONE.*
+*Caption: the token-less chain that the acceptance gate proves (FR #106). Every box is a script except the worker's own work between ACK and DONE.*
 
 ---
 
@@ -50,7 +50,7 @@ Evidence for each is in sections 4, 11, 12 and 18. Each FR needs a failing test 
 
 | # | Issue | Evidence | Seed FR outcome |
 |---|---|---|---|
-| K1 | **The chair handles `!BORED` itself** and posts claims in shop channels, which breaks the rule that Jeeves never handles !bored or offers (blocks gate) | agentic_irc chair / `gitclaim.py` (section 4.4) | The bob-{machine} ear owns !bored and offers. Jeeves only listens for ACK/DONE (agentic_irc #211). |
+| K1 | **Claim path ownership** (historical): chair vs ear vs assign grammar (blocks gate) | agentic_irc chair / `gitclaim.py` (section 4.4) | **Resolved by FR #106:** Jeeves owns `!bored` → **assign** (one line; ear OFFER retired). README is SoT. |
 | K2 | **The claim code ignores real worker nicks.** It accepts only `w-<short>-<pid>`, but the live seats are `{machine}-{pid}` (e.g. `marchhare-34992`) (blocks gate) | section 4.4, gap 1 | One nick grammar `{machine}-{pid}` for everything, with a test. |
 | K3 | **Nothing is marked accepted:** 28 unaccepted and 0 accepted despite many ACKs (blocks gate) | ionos `queue.json`, section 4.3 | Accept on ACK, busy/idle on the webhook (#211 and its comment). |
 | K4 | **Merged PRs stay queued** (skills-visionary #18/#20/#21, agentic_irc #201/#202, AgentMonitor #87, agentic_build #326) and there's no supersede; issues are labelled `PR` instead of FR (blocks gate) | section 4.3, section 7 | The supersede engine from #207 plus a GitHub resync/backfill; `reopened` gets queued. |
@@ -60,7 +60,7 @@ Evidence for each is in sections 4, 11, 12 and 18. Each FR needs a failing test 
 | K8 | **The receiver launcher `BobReport-ionos` is ad hoc** (a script in the Administrator profile, not in any repo) | section 4.3, section 18 | gh-Jeeves (or agentic_build) owns the receiver service and installer. |
 | K9 | **`config/bobiverse.json` has duplicate `reportUrl` keys** (with and without :7700) | section 4.2 | A single key (`https://irc.ntsa.uk/bob/v1/report`) plus `jeeves.config_lint` / FR #10 tests. |
 | K10 | **Docs contradict the rules:** 3 agentic_build README diagrams and the `bob-token-efficient-handoff` skill say "Jeeves offers the job" | section 4.4 | Fix the docs and skills; gh-Jeeves README is the source of truth with small diagrams. **FR #11** + lint `tests/test_docs_k10_fr11.py`. |
-| K11 | **ASSIGN has no owner:** no code sends it, so it was hand/LLM-sent via bob-marchhare. Several ASSIGNs were fired while the worker was busy, and multi-line assignments split into separate wakes (blocks gate) | sections 11, 12, 18 | A deterministic single-line OFFER from the ear, one item per worker, gated on busy state. |
+| K11 | **ASSIGN has no owner:** hand/LLM multi-line wakes while busy (blocks gate) | sections 11, 12, 18 | **Resolved by FR #106:** deterministic single-line **Jeeves assign**, one open item per worker, busy-gated. |
 | K12 | **Worker sessions look idle:** FROM payloads run as hidden `agent.exe -r <session> -p` processes, not in the visible seat | section 11 | Busy state on the webhook/TipForm from ACK/DONE; the worker pack echoes its task in the seat. **FR #13** sets `machines.<id>.working_on` from ACK/DONE (`tests/test_worker_busy_tipform_k12_fr13.py`); seat echo + TUI visibility: AgentMonitor #90. |
 | K13 | **IRC reconnect storm:** irc_agent `PART :recv idle`, then the monitor relaunches every few seconds, then Ergo's "too many connections" throttle | section 11, section 5.9 | Reconnect in place with exponential backoff on the throttle ERROR (agentic_irc #210 area); Jeeves and the ears get the same. **FR #14** / #108: `TlsIrcClient.ensure_connected` retries forever with cap ~30s; success clears storm counters (`tests/test_reconnect_k13_fr14.py`). |
 | K14 | **The receiver's secret filter rejects payloads** containing certain strings, so issues with them are never announced | agentic_irc #206 | Scan only the secret-bearing fields; test with this brief's text. |
@@ -90,14 +90,15 @@ Seed skills (each is a seed FR with a test or lint that checks the skill exists 
 - **Jeeves does:**
   - Announces GitHub webhook events as single `GIT …` lines on `#bobiverse` (bobs and Jeeves only).
   - Owns the **task queue** (unaccepted, accepted, done) on the digest webhook `https://irc.ntsa.uk/bob/v1/report`. The on-disk `queue.json` is only a crash mirror.
-  - Sits **silently** in every `#{machine}` shop channel and records worker **ACK/DONE**, updating the queue and worker busy/idle on the webhook.
-  - Answers **`!list`** by private message.
+  - On trusted worker **`!bored`** in `#{machine}`, **assigns** the next job (FR #106): `<nick>: <TYPE> <owner/repo>#<n> <url>` (ear OFFER retired).
+  - Records worker **ACK/DONE** in every `#{machine}`, updating the queue and worker busy/idle on the webhook.
+  - Answers **`!list`** / shop commands by private message where specified.
 - **Jeeves never:**
-  - handles `!bored`;
-  - offers or assigns jobs;
-  - posts in shop channels during normal operation;
-  - reasons with an LLM.
-- Jeeves is becoming **integral**: it is the critical path of the token-less fleet. So it moves out of `agentic_irc` into its own repo, **gh-Jeeves**, with its own service, tests and release cycle.
+  - emits ear-style `OFFER` lines (retired);
+  - reasons with an LLM on the token-less path;
+  - stamps human UAT (Bob only);
+  - posts model-owned `!bored` (workers'/monitors' line).
+- Jeeves is **integral**: critical path of the token-less fleet in **gh-Jeeves**, with its own service, tests and release cycle.
 
 ---
 
@@ -120,12 +121,12 @@ Seed skills (each is a seed FR with a test or lint that checks the skill exists 
 2. **Silent shop listener.** Jeeves sits **silently** in every `#{machine}` shop channel and monitors worker lines:
    - **ACK**: the job is **accepted**, and Jeeves sets the worker **busy** on the webhook.
    - **DONE**: the job is **completed**, Jeeves sets the worker **idle** and applies **supersede**.
-3. **No claiming.** Jeeves **never handles `!bored`** and **never offers**.
+3. **Assign-on-`!bored` (FR #106).** Jeeves **owns** trusted worker `!bored` → one assign line in that shop. Ear `OFFER` is retired. Do not invent a parallel claimer.
 4. **Workers stay in their shop.**
-   - Workers join **only their own `#{machine}`**, never `#bobiverse`.
-   - A worker idle for **more than 2 minutes** sends **`!bored`** there.
-   - The **bob-{machine} ear** offers the **top unaccepted job addressed to that nick** and takes the ACK.
-5. **Deterministic path.** The announce → accepted-worker path is **fully deterministic**: scripts only, and it works during a token outage.
+   - Workers join **only their own `#{machine}`**, never `#bobiverse` (fleet workers).
+   - Idle seats emit **`!bored`** there (watch-seat monitor owns that byte; model never posts `!bored`).
+   - Jeeves assigns the next focused/unaccepted job; the worker **ACK**s then works.
+5. **Deterministic path.** The announce → assign → accepted-worker path is **fully deterministic**: scripts only, and it works during a token outage.
 6. **Supersede rules:**
    - An FR with a PR becomes **MRB of the PR**.
    - MRB **PASS merged** becomes **UAT**.
@@ -203,7 +204,7 @@ Seed skills (each is a seed FR with a test or lint that checks the skill exists 
 ### 4.4 Rule divergences to fix in gh-Jeeves
 | Rule | Today |
 |---|---|
-| CAST IRON 3 (Jeeves never handles `!bored`) | The chair handles `!BORED` and posts claims in shops (`irc_agent._git_bored`). |
+| CAST IRON 3 (FR #106 assign-on-`!bored`) | Live path: Jeeves assigns; ear OFFER retired (README SoT). |
 | CAST IRON 2 (ACK/DONE → accepted/busy, done/idle) | Not implemented. `accepted` stays empty (0 on ionos). |
 | CAST IRON 6 (supersede) | Not implemented. Merged or closed items stay queued. |
 | Worker nick | `gitclaim` expects `w-<short>-<pid>` (for example `w-mh-123`). Live watch-seat workers use **`{machine}-{pid}`** (for example `marchhare-34992`), so they are ignored by `bored_gate`. |
@@ -252,20 +253,19 @@ stateDiagram-v2
 ```
 *Caption: the queue holds only the current task per piece of work, and each GitHub event replaces it deterministically.*
 
-### 5.3 Shop claim: !bored → offer → ACK
+### 5.3 Shop claim: !bored → Jeeves assign → ACK (FR #106)
 ```mermaid
 sequenceDiagram
   participant W as worker (#machine)
-  participant E as bob-machine ear
+  participant J as Jeeves
   participant Q as webhook queue
-  participant J as Jeeves (silent)
-  W->>E: !bored (idle > 2 min)
-  E->>Q: read top unaccepted
-  E->>W: offer addressed to nick
-  W->>E: ACK TYPE repo#n
-  J-->>Q: mark accepted
+  W->>J: !bored (idle / monitor)
+  J->>Q: pick next unaccepted (focus sort)
+  J->>W: nick: TYPE repo#n url
+  W->>J: ACK TYPE repo#n
+  J-->>Q: mark accepted + busy
 ```
-*Caption: the ear offers and the worker ACKs in #machine, while Jeeves only listens and records the acceptance.*
+*Caption: Jeeves assigns on !bored; the worker ACKs in #machine (ear OFFER retired).*
 
 ### 5.4 ACK/DONE → webhook busy/idle
 ```mermaid
@@ -314,11 +314,11 @@ flowchart LR
   EAR[bob-machine ear] --- SH["#machine"]
   W1[worker seat A] --- SH
   W2[worker seat B] --- SH
-  J[Jeeves silent] --- SH
+  J[Jeeves assign + ACK/DONE] --- SH
   EAR --- BV["#bobiverse"]
-  EAR --> WH[webhook queue]
+  J --> WH[webhook queue]
 ```
-*Caption: each machine's shop holds its ear, its own workers and a silent Jeeves; only the ear also sits in #bobiverse.*
+*Caption: each machine's shop holds its ear, its workers, and Jeeves (assign-on-!bored + ACK/DONE); ears also sit in #bobiverse.*
 
 ### 5.8 Ergo ops and channel registration
 ```mermaid
@@ -347,10 +347,10 @@ flowchart TD
 
 ## 6. Wire grammar (gh-Jeeves owns and documents it; ears and worker packs must match)
 - **Announce** (Jeeves → #bobiverse): `GIT <event> <owner/repo> <action> #<n> <title> by <actor>` (≤380 chars; split per #205).
-- **Idle** (worker → own #machine): `!bored`
-- **Offer** (ear → #machine), proposed: `<nick>: OFFER <FR|MRB|UAT> <owner/repo>#<n> <url>`. It must be addressed to exactly one nick, and **one open offer or assignment per worker at a time**.
-- **Accept** (worker): `ACK <TYPE> <owner/repo>#<n>`
-- **Complete** (worker): `DONE <TYPE> <owner/repo>#<n> <PR|PASS merged|FAIL fix#m> <url>`
+- **Idle** (worker/monitor → own #machine): `!bored`
+- **Assign** (Jeeves → #machine, FR #106): `<nick>: <FR|MRB|UAT> <owner/repo>#<n> <url>`. One open assign per worker; ear `OFFER` grammar retired.
+- **Accept** (worker): `ACK <TYPE> <owner/repo>#<n>` (outbox line starts with `ACK`; no nick prefix)
+- **Complete** (worker): `DONE <TYPE> <owner/repo>#<n> [PASS|FAIL] <url>` (exact DONE wire; model never appends `!bored`)
 - **Return** (worker): `NACK|GIVEUP <TYPE> <owner/repo>#<n>`
 - **List**: `/msg Jeeves !list` → PM, oldest first: `1/17 FR SimonBarnett/agentic_irc#204 <title> <url>`. Cap 30 lines, then `+K more`; rate limit one per nick per 10 s; `queue empty` when empty. Workers use the PM path only.
 - Worker nicks accepted: `{machine}-{pid}` (watch seats, today) and `w-<short>-<pid>` (legacy). Lines are only accepted from a nick in **its own** `#{machine}`. Lines from `bob-*`, `simon` or other channels are ignored.
@@ -452,16 +452,15 @@ Other requirements:
 ## 14. gh-Jeeves scope (what the new repo owns)
 1. **Announce chair:** IRC client (TLS, SASL-ready, reconnect with exponential backoff and jitter, singleton nick, 417-safe splitting), joins `#bobiverse` plus every fleet `#{machine}` from the fleet registry, and drains the chair outbox.
 2. **Queue engine with supersede:** a pure-function reducer `(queue, event) → queue` for GitHub events and shop events (section 7), with idempotent replay, GitHub resync and FR/MRB/UAT kinds. `queue.json` is the crash mirror; the webhook is the source of truth.
-3. **Shop listener:** parses `ACK/DONE/NACK/GIVEUP` from `{machine}-{pid}` / `w-*` nicks in their own shop only. It is silent in shops, returns jobs to unaccepted on QUIT or timeout, and **never handles `!bored` or offers**.
+3. **Shop listener + assign:** on trusted `{machine}-{pid}` `!bored` in own shop, **assigns** the next job (FR #106). Parses `ACK/DONE/NACK/GIVEUP`; returns jobs to unaccepted on QUIT or timeout. Does **not** emit ear `OFFER`.
 4. **`!list`:** PM replies, capped and rate-limited.
 5. **Webhook writer:** POSTs accepted, done and worker busy/idle to `/bob/v1/report`. Jeeves `lastSeen` feeds TipForm (Jeeves up or down).
 6. **GitHub receiver** (`/bob/v1/git`): moves in with the queue engine, including the fixed secret filter (#206). The generic digest `/bob/v1/report` fleet fuel merge can stay in agentic_irc behind the same process in phase 1 (see section 16).
-7. **Service installer:** Windows service `BobJeeves` (#330):
-   - automatic delayed start, recovery restarts, and a single-instance mutex;
+7. **Service installer:** Windows service `BobJeeves` (#330 / gh-Jeeves install FRs):
+   - automatic start, recovery restarts, and a single-instance mutex;
    - replaces or disables task `BobJeeves-chair`;
    - runs from the deployed release, not a hotpatch worktree;
-   - keeps its state in `~\.agentic-irc-bobiverse`;
-   - solves the DPAPI user-scope identity problem (run as a dedicated service account with its own profile, or move the identity to machine-scope protection);
+   - keeps queue/home under the digest / Jeeves homes;
    - rotating logs; never touches Ergo.
 8. **Tests:**
    - unit tests for every supersede row, grammar parse and `!list` formatting;
@@ -469,7 +468,7 @@ Other requirements:
    - the **G1 token-less E2E** (section 0).
 9. **Docs:** README with the small mermaids above, the wire grammar and ops runbook, and a honesty-box `harvest-agent-skills` skill with `github:` pointing at gh-Jeeves.
 
-Non-goals: LLM features, offering or assigning, Ergo config, TipForm UI, worker implementation.
+Non-goals: LLM features, Ergo config, TipForm UI, worker implementation, human UAT stamp (Bob only).
 
 ## 15. What stays where
 | Stays in **agentic_irc** | Stays in **agentic_build** |
@@ -485,16 +484,15 @@ Non-goals: LLM features, offering or assigning, Ergo config, TipForm UI, worker 
    - Copy `gitclaim.py`, the chair parts of `irc_agent.py`, and the announce/webhook parts of `bobreport.py` / `bobcallback.py` into gh-Jeeves, with history if practical (`git filter-repo`).
    - Keep the wire format byte-compatible. Add the local-ircd test harness and G1.
 3. **Phase 2: rule fixes in gh-Jeeves:**
-   - remove `!BORED` handling from the chair;
-   - add the ACK/DONE listener (#211), the supersede reducer and resync (#207), `!list` (#208), the secret filter (#206), line splitting (#205), and webhook busy/idle.
-4. **Phase 3: ear takes the claim.** In agentic_irc, the bob-{machine} ear implements `!bored` → offer (one at a time, skipping busy workers) → reads the ACK. Worker packs send `!bored`, `ACK` and `DONE` in the grammar. Ship this in the **same release window** as phase 2, so there is never a period with no claimer.
+   - ACK/DONE listener, supersede reducer and resync, `!list`, secret filter, line splitting, webhook busy/idle.
+4. **Phase 3: Jeeves owns assign-on-`!bored` (FR #106).** Chair assigns one line on trusted shop `!bored`; ear OFFER path retired. Worker packs ACK/DONE with the exact wire grammar.
 5. **Phase 4: service.**
-   - gh-Jeeves installs `BobJeeves` (#330), disables `BobJeeves-chair` and deploys from a release tag.
+   - gh-Jeeves installs `BobJeeves`, disables `BobJeeves-chair` and deploys from a release tag.
    - `Install-BobFleet.ps1` on ionos calls it.
-   - One-off: resync the live queue from GitHub (clearing the 28 stale rows).
+   - One-off: resync the live queue from GitHub when needed.
 6. **Phase 5: cut-over and clean-up.**
    - Remove the chair code from agentic_irc, leaving a thin shim that errors "moved to gh-Jeeves".
-   - Update the skills (bob-jeeves-chair, bob-git-accept, bob-token-handoff) and the agentic_build README diagrams 2–4 so they say **Jeeves assigns** (FR #11 / K10).
+   - Skills and agentic_build README say **Jeeves assigns** (FR #11 / K10 / #146).
    - Fix the duplicate `reportUrl` key.
 7. **Phase 6: ops.** After Simon approves, agentic_build #327 enables registration and ops.
 
@@ -505,7 +503,7 @@ Rollback: re-enable task `BobJeeves-chair` on the tagged legacy checkout. The qu
    - `GET https://irc.ntsa.uk/bob/v1/report`: Jeeves `lastSeen` is fresh.
    - The ear on the test machine and one worker seat are configured with **no token pools**, and the worker is a scripted fake that replies ACK and DONE.
 2. On a sandbox repo with the Bob hook, open issue "smoke <timestamp>". Expect `GIT issues <repo> opened #n` on #bobiverse (ionos `~\.agentic-irc-bobiverse\irc.log`) and `FR #n` in `queue.unaccepted`.
-3. The worker sends `!bored` in `#{machine}`. Expect the ear's `OFFER FR <repo>#n` addressed to that nick.
+3. The worker/monitor sends `!bored` in `#{machine}`. Expect Jeeves assign: `<nick>: FR <repo>#n <url>`.
 4. The worker sends `ACK FR <repo>#n`. Expect the row in `queue.accepted` and the worker busy in `machines.<id>.workers`.
 5. Open a PR with `Closes #n`. Expect `FR #n` to be replaced by `MRB #pr`.
 6. The worker sends `DONE FR <repo>#n PR <url>`. Expect the worker idle and the row done.

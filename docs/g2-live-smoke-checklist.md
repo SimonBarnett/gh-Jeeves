@@ -31,7 +31,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobJeeves.ps1 
 ## Channel / webhook
 
 - [ ] GIT announce appears only on `#bobiverse` (chair-outbox drain)
-- [ ] Shop channels: no OFFER/`!bored` from Jeeves; ACK/DONE update digest
+- [ ] Shop channels: Jeeves assigns on trusted `!bored` (no ear `OFFER`); ACK/DONE update digest
 - [ ] In-channel `!list` / `!help` → **PM only** (no channel queue dump)
 - [ ] `GET http://127.0.0.1:<port>/bob/v1/report` shows queue + workers
 - [ ] `POST /bob/v1/git` still enqueues; 15‑minute resync does not drop concurrent webhooks
