@@ -3,16 +3,21 @@
 # Needs a token with the `workflow` scope to push the result.
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = (Split-Path $PSScriptRoot -Parent),
+    [string]$RepoRoot,
     [switch]$Write
 )
 $ErrorActionPreference = 'Stop'
+if (-not $RepoRoot) {
+    if ($PSScriptRoot) { $RepoRoot = Split-Path $PSScriptRoot -Parent }
+    else { $RepoRoot = (Get-Location).Path }
+}
+$RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
 $src = Join-Path $RepoRoot 'tools\mrb-seat-trailer.yml.desired'
 $dst = Join-Path $RepoRoot '.github\workflows\mrb-seat-trailer.yml'
 if (-not (Test-Path -LiteralPath $src)) { throw "missing $src" }
 $desired = Get-Content -LiteralPath $src -Raw
 if ($desired -notmatch "pull_request\.body \|\| '' \}\}") {
-    throw 'desired workflow missing balanced ${{ ... || '''' }} expression'
+    throw 'desired workflow missing balanced expression'
 }
 if (-not $Write) {
     Write-Host "Dry-run OK. Re-run with -Write to overwrite $dst"
