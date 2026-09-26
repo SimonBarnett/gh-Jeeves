@@ -196,7 +196,10 @@ def test_report_payload_get_shape_all_four(tmp_path: Path):
 
 
 def test_merge_pid_worker_still_updates(tmp_path: Path):
-    """Non-destructive merge still applies ear pid-keyed worker rows."""
+    """Non-destructive merge still applies ear pid-keyed worker rows.
+
+    FR #162: coerce promotes pid keys to nick; digit ghosts must not remain.
+    """
     home = tmp_path / "d"
     home.mkdir()
     apply_report(
@@ -215,5 +218,76 @@ def test_merge_pid_worker_still_updates(tmp_path: Path):
         },
     )
     fl = load_digest(home)["machines"]["flamingo"]["workers"]
-    assert "46804" in fl
-    assert fl["46804"]["working_on"] == "FR ear"
+    assert "flamingo-46804" in fl
+    assert "46804" not in fl
+    assert fl["flamingo-46804"]["working_on"] == "FR ear"
+
+
+def test_merge_empty_workers_via_bob_alias_preserves_busy(tmp_path: Path):
+    """Hostile: bob-<machine> heartbeat with workers:{} must not wipe seats."""
+    home = tmp_path / "d"
+    home.mkdir()
+    nick = "marchhare-31712"
+    apply_report(
+        home,
+        {
+            "op": "worker_state",
+            "nick": nick,
+            "state": "busy",
+            "job": "SimonBarnett/gh-Jeeves FR #159",
+        },
+    )
+    out = apply_report(
+        home,
+        {
+            "op": "merge",
+            "machine": "bob-marchhare",
+            "online": True,
+            "status": "operational",
+            "workers": {},
+            "working_on": "",
+            "pcent": {"cursor-models": 9},
+        },
+    )
+    assert out.ok
+    doc = load_digest(home)
+    assert "bob-marchhare" not in doc["machines"]
+    mw = doc["machines"]["marchhare"]["workers"]
+    assert nick in mw
+    assert mw[nick]["state"] == "busy"
+    assert doc["machines"]["marchhare"]["working_on"]
+    assert doc["machines"]["marchhare"]["pcent"]["cursor-models"] == 9
+
+
+def test_merge_partial_workers_does_not_drop_sibling_seat(tmp_path: Path):
+    """Hostile: incoming ear workers for one nick must keep the other seat."""
+    home = tmp_path / "d"
+    home.mkdir()
+    apply_report(
+        home,
+        {"op": "worker_state", "nick": "ionos-11", "state": "busy", "job": "A"},
+    )
+    apply_report(
+        home,
+        {"op": "worker_state", "nick": "ionos-22", "state": "busy", "job": "B"},
+    )
+    apply_report(
+        home,
+        {
+            "op": "merge",
+            "machine": "ionos",
+            "online": True,
+            "workers": {
+                "11": {
+                    "nick": "ionos-11",
+                    "state": "busy",
+                    "working_on": "A-updated",
+                }
+            },
+        },
+    )
+    mw = load_digest(home)["machines"]["ionos"]["workers"]
+    assert set(mw.keys()) >= {"ionos-11", "ionos-22"}
+    assert "11" not in mw
+    assert mw["ionos-11"]["working_on"] in ("A-updated", "A")
+    assert mw["ionos-22"]["state"] == "busy"
