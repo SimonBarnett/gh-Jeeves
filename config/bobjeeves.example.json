@@ -1,6 +1,6 @@
 {
   "topology": "combined",
-  "comment": "FR #48: one service runs chair+receiver (python -m jeeves all). No BobIrcd dependency.",
+  "comment": "FR #48/#72: one service runs chair+receiver (python -m jeeves all). No BobIrcd dependency. Installer writes secret paths into nssm AppEnvironmentExtra (LocalSystem has no user home fallback).",
   "nick": "Jeeves",
   "irc_host": "irc.ntsa.uk",
   "irc_port": 6697,
@@ -9,13 +9,18 @@
   "tls_cafile": "",
   "tls_pin_sha256": "",
   "sasl_user": "",
-  "sasl_password_file": "%USERPROFILE%\\.grok\\ergo\\connect.password",
-  "password_file": "",
+  "sasl_password_file": "",
+  "password_file": "%USERPROFILE%\\.grok\\ergo\\connect.password",
+  "password_file_comment": "FR #72: Ergo server-password auth (no services account). Leave sasl_user empty; set password_file. Installer expands into AGENTIC_IRC_PASSWORD_FILE.",
   "receiver_bind": "127.0.0.1",
   "receiver_port": 19781,
+  "receiver_secret_file": "%USERPROFILE%\\.grok\\bob\\report.secret",
+  "receiver_secret_file_comment": "FR #72: X-Bob-Secret path becomes BOB_CALLBACK_SECRET_FILE on the service.",
   "jeeves_home": "%USERPROFILE%\\.agentic-irc-jeeves",
   "digest_home": "%USERPROFILE%\\.agentic-irc-bobiverse",
   "shops_seed": "#bobiverse,#flamingo,#ionos,#marchhare,#ce-priority-dev1",
   "resync_interval_s": 900,
+  "disable_resync": false,
+  "disable_resync_comment": "FR #72/#70: true → JEEVES_RESYNC_DISABLE=1 and --no-resync (no-token hosts).",
   "never_depend_on": ["BobIrcd"]
 }

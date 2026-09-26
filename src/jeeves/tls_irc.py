@@ -502,11 +502,20 @@ def make_self_signed_cert(dir_path: Path) -> tuple[Path, Path]:
         return cert, key
     except ImportError:
         pass
+    # FR #72 / MRB #98: no in-repo private key fixture (GitGuardian). Prefer
+    # cryptography (dev extra); else openssl if present; else clear error.
+    import shutil
     import subprocess
 
+    openssl = shutil.which("openssl")
+    if not openssl:
+        raise RuntimeError(
+            "G1 TLS cert generation needs the cryptography package "
+            "(pip install 'gh-jeeves[dev]') or openssl on PATH. FR #72."
+        )
     subprocess.run(
         [
-            "openssl",
+            openssl,
             "req",
             "-x509",
             "-newkey",

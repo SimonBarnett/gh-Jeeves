@@ -128,6 +128,62 @@ def test_hydrate_sasl_password_file(tmp_path: Path, monkeypatch):
     assert os.environ.get("AGENTIC_IRC_SASL_PASSWORD") == "s3cret-line"
 
 
+def test_hydrate_server_password_file(tmp_path: Path, monkeypatch):
+    """FR #72: non-SASL Ergo server password via AGENTIC_IRC_PASSWORD_FILE."""
+    from jeeves.env_secrets import hydrate_secrets_from_files
+
+    secret = tmp_path / "server.pass"
+    secret.write_text("ergo-server-pw\n", encoding="utf-8")
+    monkeypatch.delenv("AGENTIC_IRC_PASSWORD", raising=False)
+    monkeypatch.delenv("AGENTIC_IRC_SASL_PASSWORD", raising=False)
+    monkeypatch.setenv("AGENTIC_IRC_PASSWORD_FILE", str(secret))
+    hydrate_secrets_from_files()
+    assert os.environ.get("AGENTIC_IRC_PASSWORD") == "ergo-server-pw"
+
+
+def test_install_dryrun_receiver_secret_and_password_and_no_resync(tmp_path: Path):
+    """FR #72 / MRB #98 fix: DryRun surfaces receiver_secret_file, password auth, disable_resync."""
+    cfg = {
+        "topology": "combined",
+        "nick": "Jeeves",
+        "irc_host": "irc.ntsa.uk",
+        "irc_port": 6697,
+        "tls": True,
+        "sasl_user": "",
+        "sasl_password_file": "",
+        "password_file": str(tmp_path / "pw.txt"),
+        "receiver_secret_file": str(tmp_path / "bob.secret"),
+        "receiver_port": 19781,
+        "jeeves_home": str(tmp_path / "jeeves"),
+        "digest_home": str(tmp_path / "digest"),
+        "disable_resync": True,
+        "never_depend_on": ["BobIrcd"],
+    }
+    (tmp_path / "pw.txt").write_text("x\n", encoding="utf-8")
+    (tmp_path / "bob.secret").write_text("sec\n", encoding="utf-8")
+    cfg_path = tmp_path / "bobjeeves.json"
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    plan = _run_install("-ConfigPath", str(cfg_path), "-Production")
+    assert plan.get("_exit_code") == 0, plan
+    assert plan.get("ok") is True
+    assert plan.get("disable_resync") is True or plan.get("resync_disable") is True
+    assert plan.get("auth_mode") == "server_password"
+    assert str(plan.get("password_file") or "").endswith("pw.txt")
+    assert str(plan.get("receiver_secret_file") or "").endswith("bob.secret")
+    args = " ".join(str(a) for a in (plan.get("python_args") or []))
+    assert "--no-resync" in args
+    text = (ROOT / "tools" / "Install-BobJeeves.ps1").read_text(encoding="utf-8")
+    assert "BOB_CALLBACK_SECRET_FILE" in text
+    assert "JEEVES_RESYNC_DISABLE" in text
+    assert "ReceiverSecretFile" in text
+
+
+def test_no_private_key_fixture_in_repo():
+    """MRB #98 FAIL fix: never commit TLS private keys (GitGuardian)."""
+    d = ROOT / "tests" / "fixtures" / "g1_tls"
+    assert not (d / "g1.key").is_file()
+
+
 def test_receiver_default_is_19781():
     """FR #48: bare `python -m jeeves` matches IIS/helper default (not 8765)."""
     from jeeves.__main__ import _parse
