@@ -5,12 +5,29 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("jeeves.queue")
+
+# FR #139: serialize queue.json mutations so a long resync cannot wipe an ACK
+# that landed after reconcile loaded its snapshot.
+_queue_locks: dict[str, threading.RLock] = {}
+_queue_locks_guard = threading.Lock()
+
+
+def queue_lock(home: Path) -> threading.RLock:
+    """Per-home RLock for load/mutate/save of queue.json."""
+    key = str(Path(home).resolve())
+    with _queue_locks_guard:
+        lock = _queue_locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _queue_locks[key] = lock
+        return lock
 
 QUEUE_VERSION = 1
 ACCEPTED_CAP = 200
@@ -528,7 +545,15 @@ def _remove_tasks_for_ids(
 
 
 def apply_queue_event(home: Path, claim: Claim) -> str:
-    """Apply supersede rules (K4 / agentic_irc #207); return action tag."""
+    """Apply supersede rules (K4 / agentic_irc #207); return action tag.
+
+    FR #139: serialized with resync / ACK via ``queue_lock``.
+    """
+    with queue_lock(home):
+        return _apply_queue_event_locked(home, claim)
+
+
+def _apply_queue_event_locked(home: Path, claim: Claim) -> str:
     # FR #75: ignored repos never enqueue or supersede.
     from .ignore import is_ignored
 
@@ -800,7 +825,21 @@ def accept_job(
     Idempotent: if already accepted by the same nick, return accepted again.
     Legacy PR-typed issue rows match ACK FR. Same-machine seat restart reassigns.
     Parseable ACK with no queue row still records the worker busy (no_match).
+
+    FR #139: serialized with resync via ``queue_lock``.
     """
+    with queue_lock(home):
+        return _accept_job_locked(home, nick, channel, task, repo, ident)
+
+
+def _accept_job_locked(
+    home: Path,
+    nick: str,
+    channel: str,
+    task: str,
+    repo: str,
+    ident: str,
+) -> tuple[str, dict | None]:
     doc = load_queue(home)
     ident = _norm_ident(ident)
     repo = _norm_repo(repo)
@@ -947,7 +986,23 @@ def accepted_rows(home: Path) -> list[dict]:
     return list(load_queue(home).get("accepted") or [])
 
 def complete_job(home: Path, nick: str, task: str, repo: str, ident: str, result: str = "ok", url: str = "") -> tuple[str, dict | None]:
-    """DONE path: accepted → done; worker idle; K15 MRB FAIL restores linked FR."""
+    """DONE path: accepted → done; worker idle; K15 MRB FAIL restores linked FR.
+
+    FR #139: serialized with resync via ``queue_lock``.
+    """
+    with queue_lock(home):
+        return _complete_job_locked(home, nick, task, repo, ident, result, url)
+
+
+def _complete_job_locked(
+    home: Path,
+    nick: str,
+    task: str,
+    repo: str,
+    ident: str,
+    result: str = "ok",
+    url: str = "",
+) -> tuple[str, dict | None]:
     doc = load_queue(home)
     ident = _norm_ident(ident)
     repo = _norm_repo(repo)
