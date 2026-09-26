@@ -21,6 +21,16 @@ FLEET_MACHINE_IDS = (
     "ce-priority-dev1",
 )
 
+# FR #159: ear/tray aliases must land on the canonical fleet seat (not an orphan key).
+MACHINE_ID_ALIASES = {
+    "dev1": "ce-priority-dev1",
+    "bob-dev1": "ce-priority-dev1",
+    "bob-ce-priority-dev1": "ce-priority-dev1",
+    "bob-flamingo": "flamingo",
+    "bob-marchhare": "marchhare",
+    "bob-ionos": "ionos",
+}
+
 _SECRET_MARKERS = (
     "BEGIN PRIVATE KEY",
     "ghp_",
@@ -44,10 +54,18 @@ def normalize_machine_id(raw: str) -> str:
     s = (raw or "").strip().lower()
     if not s:
         return ""
+    if s in MACHINE_ID_ALIASES:
+        return MACHINE_ID_ALIASES[s]
+    if s.startswith("bob-") and s[4:] in MACHINE_ID_ALIASES:
+        return MACHINE_ID_ALIASES[s[4:]]
+    if s.startswith("bob-") and s[4:] in FLEET_MACHINE_IDS:
+        return s[4:]
     if s in FLEET_MACHINE_IDS:
         return s
     # allow unknown machines through (normalized slug)
     s = re.sub(r"[^a-z0-9_-]+", "-", s).strip("-")
+    if s in MACHINE_ID_ALIASES:
+        return MACHINE_ID_ALIASES[s]
     return s
 
 
@@ -461,8 +479,13 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
                 ent["lastSeen"] = str(payload.get("lastSeen") or payload.get("last_seen"))
             else:
                 ent["lastSeen"] = _utc_now()
+            # FR #159: merge worker keys; never replace-with-empty and wipe ACK seats.
             if isinstance(payload.get("workers"), dict):
-                ent["workers"] = coerce_workers(mid, payload["workers"])
+                merged_w = dict(ent.get("workers") or {})
+                incoming_w = coerce_workers(mid, payload["workers"])
+                for wk, wv in incoming_w.items():
+                    merged_w[wk] = wv
+                ent["workers"] = merged_w
             for k in ("running", "queued", "fuel", "uptime_since", "nick", "shop"):
                 if k in payload and payload[k] is not None:
                     ent[k] = payload[k]
@@ -488,6 +511,21 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
                     cur["model"] = str(payload["model"])
                 w[pid_s] = cur
                 ent["workers"] = w
+            doc["machines"][mid] = coerce_machine(mid, ent)
+            # FR #159: re-project top-level queue workers so ear heartbeats cannot
+            # blank machines.<id>.workers / working_on while seats are busy.
+            try:
+                qw = dict((load_queue(home).get("workers") or {}))
+                doc["queue"]["workers"] = qw
+                doc["workers"] = dict(qw)
+                sync_all_top_workers_to_machines(doc, qw)
+            except Exception:
+                pass
+            ent = coerce_machine(mid, doc["machines"].get(mid))
+            _refresh_machine_working_on(ent)
+            # Ear working_on only wins when no busy seat remains after heal.
+            if not ent.get("working_on") and "working_on" in payload:
+                ent["working_on"] = str(payload.get("working_on") or "")
             doc["machines"][mid] = coerce_machine(mid, ent)
             if isinstance(payload.get("cursor_pools"), list):
                 doc["cursor_pools"] = payload["cursor_pools"]
