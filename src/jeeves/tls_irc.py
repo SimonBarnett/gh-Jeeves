@@ -188,7 +188,13 @@ class TlsIrcClient:
         slog(log, "auth", nick=self.nick, result="registered")
 
     def reconnect(self, *, attempt: int | None = None) -> float:
-        """Close and reconnect. Returns backoff seconds applied."""
+        """Close and reconnect. Returns backoff seconds applied.
+
+        K13 / FR #14 / #108: exponential backoff capped at 30s on throttle or
+        repeat attempts. On success clear the storm counters so a healthy link
+        does not keep delaying. On connect failure leave sock=None and raise
+        so callers can retry (do not stall after one refusal).
+        """
         try:
             if self.sock:
                 self.sock.close()
@@ -198,11 +204,33 @@ class TlsIrcClient:
         n = attempt if attempt is not None else (self.reconnect_count + 1)
         delay = 0.0
         if self.last_throttle or n > 1:
-            delay = throttle_delay_s(n)
+            # Cap ~30s (#108): storm waits, not multi-minute silence.
+            delay = throttle_delay_s(n, cap=30.0)
             time.sleep(delay)
         self.reconnect_count = n
-        self._connect_and_register()
+        try:
+            self._connect_and_register()
+        except OSError:
+            self.sock = None
+            raise
+        self.last_throttle = False
+        self.reconnect_count = 0
         return delay
+
+    def ensure_connected(self, *, deadline: float | None = None) -> bool:
+        """K13: if the socket is down, reconnect with backoff until deadline."""
+        if self.sock is not None:
+            return True
+        end = float(deadline) if deadline is not None else (time.time() + 60.0)
+        while time.time() < end and self.sock is None:
+            try:
+                self.reconnect()
+            except OSError:
+                # reconnect() already slept; try again until deadline
+                continue
+            if self.sock is not None:
+                return True
+        return self.sock is not None
 
     def _send(self, line: str) -> None:
         assert self.sock is not None
@@ -266,23 +294,24 @@ class TlsIrcClient:
             if pred():
                 return True
             if self.sock is None:
-                break
+                # K13 / #108: never idle forever with sock=None after one failure
+                if not self.ensure_connected(deadline=deadline):
+                    break
+                continue
             try:
                 data = self.sock.recv(4096)
             except socket.timeout:
                 continue
             except OSError:
-                # FR #46 AC1: drop → reconnect in place with throttle backoff
-                try:
-                    self.reconnect()
-                except OSError:
+                # FR #46 / #14: drop → reconnect in place with throttle backoff
+                self.sock = None
+                if not self.ensure_connected(deadline=deadline):
                     break
                 continue
             if not data:
                 # peer closed
-                try:
-                    self.reconnect()
-                except OSError:
+                self.sock = None
+                if not self.ensure_connected(deadline=deadline):
                     break
                 continue
             self.buf += data.decode("utf-8", errors="replace")

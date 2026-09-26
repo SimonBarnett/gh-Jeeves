@@ -73,7 +73,9 @@ def test_reconnect_applies_backoff_after_throttle(monkeypatch):
     assert calls["n"] == 1
     assert slept and slept[0] >= 0.5
     assert delay == slept[0]
-    assert c.reconnect_count == 2
+    # FR #14: success clears storm counters (was sticky reconnect_count)
+    assert c.reconnect_count == 0
+    assert c.last_throttle is False
 
 
 def test_g1_tls_chair_ack_path(tmp_path: Path):
