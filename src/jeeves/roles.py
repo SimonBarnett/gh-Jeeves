@@ -735,10 +735,13 @@ class JeevesChair:
                     ack.number,
                     ack.extra[:120],
                 )
-            # K3 / FR #4 / FR #102: accept when matched; always record busy.
+            # K3 / FR #4 / FR #102 / #161: accept when matched; always record busy + task shape.
             st, row = accept_job(self.home, src, target, ack.task, ack.repo, ack.number)
             counts = queue_counts(self.home)
             job = f"{ack.repo} {ack.task} #{ack.number}"
+            title = ""
+            if isinstance(row, dict):
+                title = str(row.get("title") or row.get("line") or "")
             try:
                 if st == "accepted":
                     self._post_report(
@@ -749,18 +752,25 @@ class JeevesChair:
                             "job": job,
                             "repo": ack.repo,
                             "task": ack.task,
+                            "kind": ack.task,
                             "id": f"#{ack.number}",
+                            "title": title,
                             "accepted_row": row,
                             "queue": counts,
                         }
                     )
-                # Always mirror busy — including no_match (FR #102).
+                # Always mirror busy — including no_match (FR #102 / #161).
                 self._post_report(
                     {
                         "op": "worker_state",
                         "nick": src,
                         "state": "busy",
                         "job": job,
+                        "repo": ack.repo,
+                        "task": ack.task,
+                        "kind": ack.task,
+                        "id": f"#{ack.number}",
+                        "title": title,
                     }
                 )
             except Exception as e:
@@ -831,7 +841,8 @@ class JeevesChair:
                     "queue": counts,
                 }
             )
-            self._post_report({"op": "worker_state", "nick": src, "state": "idle"})
+            # FR #161: idle clears task fields; do not leave stale job/title
+            self._post_report({"op": "worker_state", "nick": src, "state": "idle", "job": None})
             self.assign_state.on_done(canonical_worker_nick(src) or src)
             self.handled.append(f"done:{src}:{done.repo}#{done.number}:{st}")
             log.info(
