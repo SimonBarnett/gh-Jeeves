@@ -66,9 +66,15 @@ def is_forbidden_shop_egress(text: str) -> bool:
     return False
 
 
+def is_recycle_egress(text: str) -> bool:
+    """FR #197: chair may emit RECYCLE route for local bob seat (no host ops)."""
+    t = (text or "").strip()
+    return bool(re.match(r"(?i)^RECYCLE\s+machine=", t))
+
+
 def shop_egress_allowed_for_chair(text: str) -> bool:
-    """Chair may PRIVMSG shops only for FR #106 assign / nothing-queued lines."""
-    return is_assign_egress(text)
+    """Chair may PRIVMSG shops for FR #106 assign / nothing-queued, or FR #197 RECYCLE."""
+    return is_assign_egress(text) or is_recycle_egress(text)
 
 
 def scan_source_for_forbidden_chair_handlers(root: Path | None = None) -> list[str]:
