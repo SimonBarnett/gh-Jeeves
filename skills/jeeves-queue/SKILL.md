@@ -79,6 +79,9 @@ Exit codes for dry-run: `0` ok, `2` skill incomplete.
 2. **Accepted empty after ACK:** nick `{machine}-<pid>` in own shop; see `jeeves-worker-state`.
 3. **FR vanished after FAIL + Closes #N:** K15 hold — dry-run shows `mrb_fail_hold`.
 4. **Hand edit:** copy `queue.json`, dry-run inspect, edit a temp file, diff, then replace only with ops approval.
+5. **Stuck busy / bored_skip reason=busy:** `python tools/watch_jeeves_handoff.py --once`
+   — ghost busy (busy, no accepted row) is healed on next `!bored` after the
+   handoff-heal fix; also check service restart windows that drop in-flight DONE.
 
 ## Tests
 

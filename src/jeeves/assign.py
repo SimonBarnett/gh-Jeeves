@@ -309,13 +309,28 @@ class ChairAssignState:
         if not nick_matches_shop(nick, channel):
             return AssignDecision("skip", reason="wrong_shop")
         canon = canonical_worker_nick(nick) or nick
-        # Busy / already accepted → do not assign another
-        if worker_state(home, nick) == "busy":
-            return AssignDecision("busy", reason="busy")
         q = load_queue(home)
-        for row in q.get("accepted") or []:
-            if str(row.get("nick") or "") == nick:
-                return AssignDecision("busy", reason="accepted")
+        has_accepted = any(
+            str(row.get("nick") or "") == nick
+            for row in (q.get("accepted") or [])
+            if isinstance(row, dict)
+        )
+        # Busy / already accepted → do not assign another.
+        # Ghost busy: digest/queue workers say busy but no accepted row
+        # (missed DONE during chair restart, or resync dropped finished job
+        # without clearing workers). Heal so !bored can take the next job.
+        if worker_state(home, nick) == "busy":
+            if has_accepted:
+                return AssignDecision("busy", reason="busy")
+            from .queue import set_worker_state
+
+            set_worker_state(home, nick, "idle")
+            log.warning(
+                "event=busy_ghost_heal nick=%s reason=no_accepted",
+                nick,
+            )
+        elif has_accepted:
+            return AssignDecision("busy", reason="accepted")
         # FR #182: if this seat already has an open offer, rebroadcast that line.
         # Silent skip made workers think assign was broken when they missed the first PRIVMSG.
         open_ent = None
