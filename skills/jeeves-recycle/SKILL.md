@@ -23,11 +23,19 @@ github: https://github.com/SimonBarnett/gh-Jeeves
 
 ## Local ordered steps (bob seat)
 
+Run from the seat that owns the machine (after matching the `RECYCLE` wire):
+
+```powershell
+powershell -NoProfile -File tools\Invoke-BobSeatRecycle.ps1 -ExpectedMachine marchhare
+# plan only:
+powershell -NoProfile -File tools\Invoke-BobSeatRecycle.ps1 -WhatIf
+```
+
 1. Stop managed worker processes for this install.
 2. Clear **owned/stale** PowerShell, Node, Python for this install only (never unrelated hosts of those names).
 3. Fast-forward worker Git checkout only; dirty or non-ff checkout left intact and **reported**.
-4. Reload skills.
-5. Restart workers via existing tray/service bootstrap (`Start-BobFleetTray -ForceNew` / equivalent).
+4. Reload skills (`Reinstall-AgentSkills.ps1` when present).
+5. Restart workers via existing tray bootstrap (`Start-BobFleetTray -ForceNew`).
 
 Failed cleanup or git update must be reported; do not silently start from an inconsistent tree. Duplicate `!recycle` is cooldown-blocked on Jeeves.
 

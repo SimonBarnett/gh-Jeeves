@@ -9,4 +9,7 @@ Jeeves never performs host-level process or Git operations for this command.
 
 ## Status
 
-Implemented in-tree (registry + `recycle.py` + chair route). Local seat executor hooks the `RECYCLE` wire (agentic_build tray bootstrap / `Invoke-BobSeatRecycle` companion as needed).
+Implemented in-tree:
+
+- Jeeves: registry + `recycle.py` + chair route
+- Local executor: `tools/Invoke-BobSeatRecycle.ps1` (ordered steps, owned-process filter, git ff-only, tray restart)
