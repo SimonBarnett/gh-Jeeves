@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -31,9 +32,22 @@ from .queue import load_queue, ordered_unaccepted, tasks_equivalent, worker_stat
 
 log = logging.getLogger("jeeves.assign")
 
-DEFAULT_OFFER_TIMEOUT_S = 300.0  # 5 minutes
+# CAST IRON: exclusive open offer per row_key; only re-offer after this timeout
+# with no ACK (Simon 2026-09-27: 90s for the worker to respond).
+DEFAULT_OFFER_TIMEOUT_S = 90.0
 # FR #133: after this many timed-out offers of the same job to the same seat, skip it.
 DEFAULT_MAX_OFFER_ATTEMPTS = 3
+
+
+def offer_timeout_s_from_env(default: float = DEFAULT_OFFER_TIMEOUT_S) -> float:
+    """Optional ``JEEVES_OFFER_TIMEOUT_S`` override (seconds, min 1)."""
+    raw = (os.environ.get("JEEVES_OFFER_TIMEOUT_S") or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return float(default)
 
 _ASSIGN_RE = re.compile(
     r"^(\S+):\s+(FR|MRB|UAT)\s+"
@@ -169,7 +183,12 @@ class AssignDecision:
 
 @dataclass
 class ChairAssignState:
-    """Outstanding offers keyed by worker nick; persisted under home/offers.json."""
+    """Outstanding offers keyed by worker nick; persisted under home/offers.json.
+
+    CAST IRON: at most one open offer per ``row_key`` (repo|task|#n) across all
+    workers. ``offered_keys`` skips that job for every other seat until ACK,
+    DONE, or ``timeout_s`` (default 90s) elapses with no response.
+    """
 
     timeout_s: float = DEFAULT_OFFER_TIMEOUT_S
     max_offer_attempts: int = DEFAULT_MAX_OFFER_ATTEMPTS
@@ -181,6 +200,8 @@ class ChairAssignState:
 
     def bind(self, home: Path) -> None:
         self._home = Path(home)
+        # Apply env override once at bind (service restart / tests set env first).
+        self.timeout_s = offer_timeout_s_from_env(self.timeout_s)
         self.load()
 
     def load(self) -> None:
