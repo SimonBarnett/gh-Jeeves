@@ -523,3 +523,83 @@ def harvest_should_use_intake(*, gh_available: bool, gh_authenticated: bool) -> 
     if gh_available and gh_authenticated:
         return False
     return True
+
+
+def report_should_use_intake(*, gh_available: bool, gh_authenticated: bool) -> bool:
+    """Same gate as harvest for bug/FR filings (FR #179)."""
+    return harvest_should_use_intake(
+        gh_available=gh_available, gh_authenticated=gh_authenticated
+    )
+
+
+def build_report_payload(
+    *,
+    kind: str,
+    repo: str,
+    title: str,
+    body: str,
+    source: dict[str, str] | None = None,
+    idempotency_key: str = "",
+    contact: str = "",
+    contact_public: bool = False,
+) -> dict[str, Any]:
+    """Build a FR #26 intake payload for a skill-surfaced bug (`issue`) or FR (`fr`).
+
+    Script-only helper for agents with no GitHub account (FR #179). Does not
+    network; caller POSTs or writes ``report-outbox/``.
+    """
+    k = str(kind or "").strip().lower()
+    if k not in ("issue", "fr"):
+        raise ValueError("kind must be 'issue' or 'fr'")
+    src = source or {}
+    payload: dict[str, Any] = {
+        "kind": k,
+        "repo": str(repo or "").strip(),
+        "title": str(title or "").strip(),
+        "body": str(body or ""),
+        "source": {
+            "machine": str(src.get("machine") or "")[:64],
+            "agent": str(src.get("agent") or "")[:64],
+            "skill_book": str(src.get("skill_book") or "")[:64],
+            "version": str(src.get("version") or "")[:32],
+        },
+    }
+    idem = str(idempotency_key or "").strip()
+    if idem:
+        payload["idempotency_key"] = idem[:128]
+    c = str(contact or "").strip()
+    if c:
+        payload["contact"] = c[:200]
+        payload["contact_public"] = bool(contact_public)
+    return payload
+
+
+def write_local_report_outbox(
+    outbox_dir: Path,
+    payload: dict[str, Any],
+    *,
+    filename: str | None = None,
+) -> Path:
+    """Persist a report payload when intake is unreachable (agent-side queue).
+
+    Uses the same ``idempotency_key`` on retry. Never writes secrets into the
+    filename. Returns the path written.
+    """
+    outbox_dir = Path(outbox_dir)
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    idem = str(payload.get("idempotency_key") or "").strip()
+    if filename:
+        name = filename
+    elif idem:
+        digest = hashlib.sha256(idem.encode("utf-8")).hexdigest()[:16]
+        name = f"report-{digest}.json"
+    else:
+        name = f"report-{uuid.uuid4().hex[:12]}.json"
+    path = outbox_dir / name
+    # Do not persist contact in the local outbox by default
+    safe = dict(payload)
+    if "contact" in safe and not safe.get("contact_public"):
+        safe = {k: v for k, v in safe.items() if k != "contact"}
+        safe.pop("contact_public", None)
+    path.write_text(json.dumps(safe, indent=2) + "\n", encoding="utf-8")
+    return path

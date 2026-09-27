@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1] / "skills"
 
 REQUIRED = (
     "harvest",
+    "report",
     "jeeves-install-service",
     "jeeves-health",
     "jeeves-queue",

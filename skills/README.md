@@ -7,6 +7,7 @@ Agent-controllable surface for operating, diagnosing, and changing Jeeves.
 | Skill | Purpose | Seed / refs |
 |-------|---------|-------------|
 | [harvest](harvest/SKILL.md) | Honesty box: report back via `gh` PR/issue → `/bob/v1/intake` → `harvest-outbox/` | #26 |
+| [report](report/SKILL.md) | Bug/FR with no GitHub account: `gh` → `/bob/v1/intake` (`kind: issue\|fr`) → `report-outbox/` | #179, #26 |
 | [jeeves-install-service](jeeves-install-service/SKILL.md) | Install / repair / upgrade `BobJeeves` (never Ergo) | #17 |
 | [jeeves-health](jeeves-health/SKILL.md) | Service, IRC presence, lastSeen, version drift, throttle, ops | #18 |
 | [jeeves-queue](jeeves-queue/SKILL.md) | Queue, supersede rules, `!list`, `!help`, resync; dry-run first | #19, #25, #27 |
