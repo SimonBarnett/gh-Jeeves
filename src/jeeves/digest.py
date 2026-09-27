@@ -87,6 +87,12 @@ def empty_machine(mid: str) -> dict[str, Any]:
         "pcent": {},
         "running": 0,
         "queued": 0,
+        # Usage heartbeat fields (agentic_build Write-BobIrcStatus / TipForm).
+        "weekly": None,
+        "period_end": "",
+        "cursor_label": "",
+        "cursor_period_end": "",
+        "overage_gbp": None,
     }
 
 
@@ -187,7 +193,23 @@ def coerce_machine(mid: str, raw: Any) -> dict[str, Any]:
     )
     if isinstance(raw.get("pcent"), dict):
         base["pcent"] = raw["pcent"]
-    for k in ("running", "queued", "uptime_since", "fuel", "fuel_mode", "agent", "model"):
+    for k in (
+        "running",
+        "queued",
+        "uptime_since",
+        "fuel",
+        "fuel_mode",
+        "agent",
+        "model",
+        "weekly",
+        "period_end",
+        "cursor_label",
+        "cursor_period_end",
+        "overage_gbp",
+        "remaining_pct",
+        "account_remaining_pct",
+        "cursor_remaining_pct",
+    ):
         if k in raw and raw[k] is not None:
             base[k] = raw[k]
     try:
@@ -198,6 +220,17 @@ def coerce_machine(mid: str, raw: Any) -> dict[str, Any]:
         base["queued"] = int(base.get("queued") or 0)
     except (TypeError, ValueError):
         base["queued"] = 0
+    # weekly remaining % (xAI) — 0 is valid
+    if "weekly" in raw and raw["weekly"] is not None and str(raw["weekly"]) != "":
+        try:
+            base["weekly"] = int(raw["weekly"])
+        except (TypeError, ValueError):
+            pass
+    if "overage_gbp" in raw and raw["overage_gbp"] is not None and str(raw["overage_gbp"]) != "":
+        try:
+            base["overage_gbp"] = float(raw["overage_gbp"])
+        except (TypeError, ValueError):
+            pass
     return base
 
 
@@ -572,7 +605,23 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
                 for wk, wv in incoming_w.items():
                     merged_w[wk] = wv
                 ent["workers"] = merged_w
-            for k in ("running", "queued", "fuel", "fuel_mode", "uptime_since", "nick", "shop"):
+            for k in (
+                "running",
+                "queued",
+                "fuel",
+                "fuel_mode",
+                "uptime_since",
+                "nick",
+                "shop",
+                "weekly",
+                "period_end",
+                "cursor_label",
+                "cursor_period_end",
+                "overage_gbp",
+                "remaining_pct",
+                "account_remaining_pct",
+                "cursor_remaining_pct",
+            ):
                 if k in payload and payload[k] is not None:
                     ent[k] = payload[k]
             # nested worker update by pid
