@@ -662,6 +662,12 @@ class JeevesChair:
             if not via:
                 live = self.mode_grants is not None
                 acct = self._account_for_nick(src) if live else None
+                # Nudge WHOIS so next !focus can resolve services account (WHOX race).
+                try:
+                    if self.mode_grants is not None:
+                        self.mode_grants.request_whois(src)
+                except Exception:
+                    pass
                 self._pm(src, "focus: denied (owner account required)")
                 self.handled.append(f"focus_denied:{src}")
                 log.info(

@@ -30,8 +30,12 @@ _JOIN = re.compile(
 _MODE = re.compile(r"(?i)^:?\S+\s+MODE\s+(\S+)\s+(\S+)(?:\s+(.*))?$")
 _ACCOUNT_NOTIFY = re.compile(r"(?i)^:?(\S+)!\S+\s+ACCOUNT\s+(\S+)")
 _WHO_315 = re.compile(r"(?i)^\S+\s+315\b")  # end of WHO
-# 354 WHOX custom — Ergo %tcnaf returns: token channel nick account flags
+# 354 WHOX custom. Ergo emits requested fields in FIXED server order
+# (t,c,u,i,h,s,n,f,d,l,a,...) — NOT request-letter order. For %tcnaf that is:
+# token channel nick flags account (f before a). See ergo irc/handlers.go rplWhoReply.
 _WHOX = re.compile(r"(?i)^:?\S+\s+354\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)")
+# WHO flags: H/G + optional * oper + prefixes + r (registered) + B (bot), etc.
+_WHOX_FLAGS = re.compile(r"(?i)^[HG][\w\*~&@%+#]*$")
 # 330 WHOIS logged-in-as: :server 330 me nick account :is logged in as
 _WHOIS_330 = re.compile(r"(?i)^:?\S+\s+330\s+\S+\s+(\S+)\s+(\S+)\s+:")
 # 353 NAMES: :server 353 me = #chan :@nick1 %nick2 nick3
@@ -364,7 +368,7 @@ class ModeGrantController:
         ch = (channel or "").strip()
         if not ch.startswith("#"):
             ch = "#" + ch
-        # %t c n a f — common Ergo/Unreal WHOX fields (token channel nick account flags)
+        # %tcnaf: Ergo still emits t,c,n,f,a (flags before account). Parser matches that.
         try:
             self.client.send_raw(f"WHO {ch} %tcnaf")
             self.state.events.append(f"who_sent:{ch}")
@@ -410,15 +414,20 @@ class ModeGrantController:
             return
         m = _WHOX.match(s)
         if m:
-            # WHOX %tcnaf: token(1) channel(2) nick(3) account(4) flags(5)
-            token, channel, nick, acct, _flags = (
+            # Ergo fixed emit order for %tcnaf: token channel nick FLAGS account
+            _token, _channel, nick, field4, field5 = (
                 m.group(1),
                 m.group(2),
                 m.group(3),
                 m.group(4),
                 m.group(5),
             )
-            if acct and acct not in ("*", "0"):
+            # Prefer field5 when field4 looks like WHO flags (e.g. Hr / H*@); else field4.
+            if _WHOX_FLAGS.match(field4 or ""):
+                acct, _flags = field5, field4
+            else:
+                acct, _flags = field4, field5
+            if acct and acct not in ("*", "0") and not _WHOX_FLAGS.match(acct):
                 self.set_account(nick, acct)
                 for ch in set(self.state.modes.keys()) | set(self.state.pending_sweep):
                     self.maybe_grant(nick, ch)
