@@ -471,7 +471,17 @@ def _reconcile_queue_locked(
             released.append(dict(src) if isinstance(src, dict) else row)
             desired_by_key.pop(_row_key(src) if isinstance(src, dict) else key, None)
         else:
+            # Job finished on GitHub while seat still connected (missed DONE /
+            # chair restart). Drop accepted AND clear busy — otherwise
+            # decide() keeps bored_skip reason=busy with no accepted row.
             stats.removed += 1
+            if nick:
+                _idle_worker_entry(doc, nick)
+                log.info(
+                    "event=accepted_finished_clear nick=%s job=%s",
+                    nick,
+                    key,
+                )
 
     # --- unaccepted: replace from desired remaining + released ---
     old_unacc = list(doc.get("unaccepted") or [])

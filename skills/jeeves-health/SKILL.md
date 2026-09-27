@@ -54,6 +54,10 @@ flowchart TD
 6. **Throttle / backoff:** on "too many connections", Jeeves reconnects in place
    with exponential backoff (cap ~30s, K13 / FR #14) — kill duplicates, do not
    reconnect-loop.
+7. **Handoff failures:** run `python tools/watch_jeeves_handoff.py --once`
+   (or `tools/Watch-JeevesHandoff.ps1 -Once`). Alerts append to
+   `%USERPROFILE%\.agentic-irc-jeeves\handoff-alerts.log` — ghost busy,
+   ACK-without-DONE, dual assign, outbox DONE lag. No IRC spam.
 
 ## Commands
 
