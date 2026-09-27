@@ -806,8 +806,11 @@ class JeevesChair:
             except Exception as e:
                 self.handled.append(f"ack_report_err:{src}")
                 log.warning("cmd=ack nick=%s report_err=%s", src, type(e).__name__)
-            self.assign_state.on_ack(canonical_worker_nick(src) or src)
             if st == "accepted":
+                # Only release the exclusive open offer on a matched accept.
+                # ACK no_match must NOT clear — otherwise another seat can be
+                # offered the same row_key while this worker still thinks it owns it.
+                self.assign_state.on_ack(canonical_worker_nick(src) or src)
                 self.handled.append(f"ack:{src}:{ack.repo}#{ack.number}")
                 log.info(
                     "event=ack nick=%s job=%s#%s mode=%s",
