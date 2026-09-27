@@ -119,3 +119,20 @@ def test_chair_handler_no_host_ops_in_source():
 def test_format_route_stable():
     line = format_recycle_route(machine="#ionos", requester="simon", scope="local")
     assert line == "RECYCLE machine=ionos by=simon scope=local exec=local-bob-seat"
+
+
+def test_bob_seat_recycle_script_covers_ordered_steps():
+    """Local executor lives beside Jeeves; bob seat invokes it on RECYCLE wire."""
+    root = Path(__file__).resolve().parents[1]
+    script = root / "tools" / "Invoke-BobSeatRecycle.ps1"
+    assert script.is_file(), "tools/Invoke-BobSeatRecycle.ps1 required for FR #197 local exec"
+    text = script.read_text(encoding="utf-8")
+    for step in RECYCLE_STEPS:
+        assert step in text, f"script missing step id {step}"
+    # Safety: must not kill bare powershell/node/python without ownership markers
+    assert "Test-OwnedWorkerProcess" in text
+    assert "Watch-Bob" in text or "agentic" in text
+    assert "git merge --ff-only" in text or "merge --ff-only" in text
+    assert "dirty" in text.lower()
+    # Scope check for wrong machine
+    assert "ExpectedMachine" in text
