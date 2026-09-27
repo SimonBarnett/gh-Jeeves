@@ -105,6 +105,8 @@ def empty_digest() -> dict[str, Any]:
         "cursor_pools": [],
         "events": [],
         "queue": {"unaccepted": [], "accepted": [], "done": [], "workers": {}},
+        # FR #191: non-fleet reporters (never collide with machines.*)
+        "external_reports": {},
     }
 
 
@@ -159,6 +161,8 @@ def ensure_seats(doc: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(machines, dict):
         machines = {}
         doc["machines"] = machines
+    if not isinstance(doc.get("external_reports"), dict):
+        doc["external_reports"] = {}
     for mid in FLEET_MACHINE_IDS:
         machines[mid] = coerce_machine(mid, machines.get(mid))
     for mid in list(machines.keys()):
@@ -559,6 +563,109 @@ class CallbackOutcome:
     changed: bool = True
     body: bytes | None = None
     actions: list[str] = field(default_factory=list)
+    announce: str = ""  # FR #191: chair-outbox line (e.g. EXT-REPORT …)
+
+
+def is_external_report(payload: dict[str, Any]) -> bool:
+    """FR #191: external reporters set external=true or source=external."""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("external") is True or str(payload.get("external") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return True
+    src = payload.get("source")
+    if isinstance(src, str) and src.strip().lower() == "external":
+        return True
+    if isinstance(src, dict) and str(src.get("kind") or src.get("type") or "").strip().lower() == "external":
+        return True
+    return False
+
+
+def normalize_external_id(raw: str) -> str:
+    s = re.sub(r"[^a-z0-9_-]+", "-", (raw or "").strip().lower()).strip("-")
+    return (s or "external")[:64]
+
+
+def external_dir(home: Path) -> Path:
+    return Path(home) / "external"
+
+
+def coerce_external_entry(eid: str, payload: dict[str, Any], prior: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Reduced safe subset for external reporters — never a fleet machines.* row."""
+    prior = prior if isinstance(prior, dict) else {}
+    ent: dict[str, Any] = {
+        "id": eid,
+        "source": "external",
+        "lastSeen": str(payload.get("lastSeen") or payload.get("last_seen") or _utc_now()),
+        "status": str(payload.get("status") or prior.get("status") or ""),
+        "working_on": str(
+            payload["working_on"]
+            if "working_on" in payload
+            else prior.get("working_on") or ""
+        ),
+        "online": bool(payload["online"]) if "online" in payload else bool(prior.get("online", True)),
+    }
+    if isinstance(payload.get("pcent"), dict):
+        ent["pcent"] = payload["pcent"]
+    elif isinstance(prior.get("pcent"), dict):
+        ent["pcent"] = prior["pcent"]
+    for k in ("weekly", "period_end", "overage_gbp", "remaining_pct", "label", "note"):
+        if k in payload and payload[k] is not None:
+            ent[k] = payload[k]
+        elif k in prior and prior[k] is not None:
+            ent[k] = prior[k]
+    return ent
+
+
+def format_ext_report_line(ent: dict[str, Any]) -> str:
+    """Chair announce prefix EXT-REPORT (visually distinct from fleet REPORT)."""
+    eid = str(ent.get("id") or "external")
+    status = str(ent.get("status") or ent.get("working_on") or "ok").replace("\n", " ")
+    if len(status) > 80:
+        status = status[:77] + "..."
+    return f"EXT-REPORT {eid} {status}"
+
+
+def apply_external_report(home: Path, payload: dict[str, Any]) -> CallbackOutcome:
+    """Store an external report under digest.external_reports (FR #191)."""
+    raw_id = str(payload.get("id") or payload.get("machine") or payload.get("reporter") or "")
+    if not raw_id and isinstance(payload.get("source"), dict):
+        src = payload["source"]
+        raw_id = str(src.get("id") or src.get("machine") or src.get("name") or "")
+    if not raw_id:
+        raw_id = "external"
+    eid = normalize_external_id(raw_id)
+    doc = load_digest(home)
+    ext = doc.setdefault("external_reports", {})
+    if not isinstance(ext, dict):
+        ext = {}
+        doc["external_reports"] = ext
+    before = deepcopy(ext.get(eid) or {})
+    ent = coerce_external_entry(eid, payload, before)
+    # Never write into machines.* — even if id matches a fleet seat name.
+    ext[eid] = ent
+    doc["external_reports"] = ext
+    doc["ts"] = _utc_now()
+    changed = ent != before
+    if changed:
+        _note_event(doc, "external_report", id=eid)
+        save_digest(home, doc)
+        # Durable per-reporter file under digest home/external/
+        try:
+            ed = external_dir(home)
+            ed.mkdir(parents=True, exist_ok=True)
+            (ed / f"{eid}.json").write_text(
+                json.dumps(ent, indent=2) + "\n", encoding="utf-8"
+            )
+        except OSError:
+            pass
+    line = format_ext_report_line(ent) if changed else ""
+    return CallbackOutcome(
+        ok=True, changed=changed, actions=["external_report"], announce=line
+    )
 
 
 def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> CallbackOutcome:
@@ -574,6 +681,10 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
         if kl.endswith("_secret") or kl.endswith("_token") or kl in ("authorization",):
             if isinstance(v, str) and looks_like_secret(v):
                 return CallbackOutcome(ok=False, err="secret")
+
+    # FR #191: external mode — separate store; never touch machines.*
+    if is_external_report(payload):
+        return apply_external_report(home, payload)
 
     op = str(payload.get("op") or "").strip().lower()
     doc = load_digest(home)
@@ -920,6 +1031,10 @@ def public_digest_snapshot(home: Path, *, queue_home: Path | None = None) -> dic
     except Exception:
         doc.setdefault("focus", [])
         doc.setdefault("focus_strict", False)
+    # FR #191: external reporters (additive; trays may ignore)
+    ext = doc.get("external_reports")
+    if not isinstance(ext, dict):
+        doc["external_reports"] = {}
     # version stamp optional
     stamp = Path(home) / "jeeves_version.json"
     if stamp.is_file():
