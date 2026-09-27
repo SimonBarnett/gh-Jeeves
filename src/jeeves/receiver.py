@@ -23,7 +23,7 @@ from .intake import (
     get_intake_status,
     process_intake,
 )
-from .jira_webhook import process_jira_webhook
+from .jira_webhook import load_jira_tickets, process_jira_webhook
 from .queue import apply_queue_event
 
 # FR #191: conservative default for non-fleet reporters (per client IP / min).
@@ -119,7 +119,7 @@ def make_handler(state: DigestState):
             return {k: v for k, v in self.headers.items()}
 
         def _require_write_secret(self) -> bool:
-            """FR #47 / #190: report/intake/jira POSTs need X-Bob-Secret when require_secret."""
+            """FR #47 / #190 / #201: report/intake/jira need X-Bob-Secret when require_secret."""
             if not state.require_secret:
                 return True
             return check_bob_secret(self._hdrs(), state.bob_secret)
@@ -175,6 +175,27 @@ def make_handler(state: DigestState):
                 with state.lock:
                     code, obj = get_intake_status(state.home, iid)
                 self._send_json(code, obj)
+                return
+            if path == "/bob/v1/jira":
+                # FR #201: read saved tickets.json (same X-Bob-Secret gate as POST).
+                if not self._require_write_secret():
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                with state.lock:
+                    doc = load_jira_tickets(state.home)
+                # Public shape only — never echo bob_secret / auth material.
+                self._send_json(
+                    200,
+                    {
+                        "tickets": (
+                            doc.get("tickets")
+                            if isinstance(doc.get("tickets"), dict)
+                            else {}
+                        ),
+                        "updated_at": str(doc.get("updated_at") or ""),
+                    },
+                )
                 return
             self.send_response(404)
             self.end_headers()
