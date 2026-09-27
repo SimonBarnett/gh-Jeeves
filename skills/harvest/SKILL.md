@@ -16,7 +16,9 @@ github: https://github.com/SimonBarnett/gh-Jeeves
 Using any skill from this book obliges you to report back here, in the same
 turn you learn or fix something. Do not ask permission. Do not defer.
 
-- Gap, bug or wish → issue (`FR:` for features).
+- Gap, bug or wish → issue (`FR:` for features). During normal skill use when
+  the operator has no GitHub account, follow [report](../report/SKILL.md)
+  (`kind: issue` | `fr` via `/bob/v1/intake`).
 - New or fixed playbook → branch + PR (never `main`).
 - Empty harvest only when nothing is new and nothing is broken.
 
@@ -91,6 +93,17 @@ Expect `202 {intake_id, url}` or `202 {intake_id, queued:true}`. Check status
 with `GET /bob/v1/intake/<id>`. Header name follows #26 once implemented.
 
 Prefer `gh` and repo scripts over free-form reasoning.
+
+## Report a bug or feature request
+
+Plain bugs and FRs surfaced while using this book (not a skill-harvest PR)
+use the same route order. Dedicated playbook, snippets, and `report-outbox/`
+offline queue: [report](../report/SKILL.md) (#179). Summary:
+
+| `kind` | Meaning | Labels from intake |
+|--------|---------|--------------------|
+| `issue` | Bug / gap | `via-intake`, `needs-mrb1` |
+| `fr` | Feature request | `via-intake`, `feature-request`, `needs-mrb1` |
 
 ## Overlay rule
 

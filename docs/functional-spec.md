@@ -59,7 +59,7 @@ LLM features, Ergo/BobIrcd config, TipForm UI, worker implementation, human UAT 
 
 ## Skills overlay
 
-`skills/` lets agents operate and diagnose Jeeves. Agentic control is an **overlay**: the token-less path must never depend on a skill or LLM. Foundation: `skills/harvest` (honesty box → this repo).
+`skills/` lets agents operate and diagnose Jeeves. Agentic control is an **overlay**: the token-less path must never depend on a skill or LLM. Foundation: `skills/harvest` (honesty box → this repo). Agent-surfaced bugs and feature requests from operators with **no GitHub account** go through `skills/report` → `POST /bob/v1/intake` (`kind: issue` | `fr`, labels `via-intake` / `needs-mrb1`; FR also `feature-request`) or a local `report-outbox/` retry — they must not die in chat (#179 / #26).
 
 ## Related upstream FRs
 
