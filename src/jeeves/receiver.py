@@ -15,7 +15,7 @@ _log = logging.getLogger("jeeves.receiver")
 
 from .announce import process_git_webhook
 from .auth_secret import check_bob_secret, load_bob_secret
-from .digest import apply_report, public_digest_snapshot
+from .digest import apply_report, is_external_report, public_digest_snapshot
 from .intake import (
     FakeGitHubFiler,
     IntakeConfig,
@@ -26,6 +26,9 @@ from .intake import (
 from .jira_webhook import process_jira_webhook
 from .queue import apply_queue_event
 
+# FR #191: conservative default for non-fleet reporters (per client IP / min).
+EXTERNAL_REPORT_RATE_PER_MIN = 10
+
 
 class DigestState:
     def __init__(
@@ -35,6 +38,7 @@ class DigestState:
         intake_cfg: IntakeConfig | None = None,
         bob_secret: str | None = None,
         require_secret: bool | None = None,
+        external_report_rate_per_min: int | None = None,
     ):
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True)
@@ -45,6 +49,16 @@ class DigestState:
         self.intake_filer = FakeGitHubFiler()
         self.intake_rate = RateLimiter(self.intake_cfg.rate_per_min)
         self.intake_logs: list[str] = []
+        ext_rate = external_report_rate_per_min
+        if ext_rate is None:
+            try:
+                ext_rate = int(
+                    (os.environ.get("BOB_EXTERNAL_REPORT_RATE_PER_MIN") or "").strip()
+                    or EXTERNAL_REPORT_RATE_PER_MIN
+                )
+            except ValueError:
+                ext_rate = EXTERNAL_REPORT_RATE_PER_MIN
+        self.external_report_rate = RateLimiter(max(1, int(ext_rate)))
         # FR #47: X-Bob-Secret for report/intake writes (never /bob/v1/git — fleet hooks
         # carry no secret; see docs/vision.md Trust + JEEVES_BRIEF §4.1 / §8).
         # G1 StubReceiver(bob_secret=None): ignore ambient ~/.grok secrets unless
@@ -301,18 +315,31 @@ def make_handler(state: DigestState):
                 return
             if path == "/bob/v1/report":
                 payload = self._read_json()
-                if not isinstance(payload, dict) or payload == {}:
-                    # distinguish empty parse as 400
-                    raw = True
+                if not isinstance(payload, dict):
+                    payload = {}
+                # FR #191: separate, more conservative rate limit for external reporters.
+                if is_external_report(payload):
+                    client_ip = self.client_address[0] if self.client_address else "0.0.0.0"
+                    with state.lock:
+                        if not state.external_report_rate.allow(f"ext|{client_ip}"):
+                            self._send_json(429, {"error": "rate_limited", "scope": "external"})
+                            return
                 with state.lock:
-                    out = apply_report(state.home, payload if isinstance(payload, dict) else {})
+                    out = apply_report(state.home, payload)
                     state.events.append(
-                        {"report_op": str((payload or {}).get("op") or ""), "ok": out.ok}
+                        {
+                            "report_op": str(payload.get("op") or ""),
+                            "ok": out.ok,
+                            "external": bool(is_external_report(payload)),
+                        }
                     )
                     if not out.ok:
                         self.send_response(400)
                         self.end_headers()
                         return
+                    if out.announce:
+                        state.announces.append(out.announce)
+                        state.append_outbox(out.announce)
                     if out.body is not None:
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
@@ -343,12 +370,14 @@ class StubReceiver:
         intake_cfg: IntakeConfig | None = None,
         bob_secret: str | None = None,
         require_secret: bool | None = None,
+        external_report_rate_per_min: int | None = None,
     ):
         self.state = DigestState(
             home,
             intake_cfg=intake_cfg,
             bob_secret=bob_secret,
             require_secret=require_secret,
+            external_report_rate_per_min=external_report_rate_per_min,
         )
         self.host = host
         self.port = port
