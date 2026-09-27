@@ -21,6 +21,7 @@ REQUIRED = (
     "jeeves-task-modes",
     "jeeves-uat",
     "jeeves-irc-roles",
+    "jeeves-recycle",
 )
 
 _NAME = re.compile(r"^name:\s*(\S+)\s*$", re.M)

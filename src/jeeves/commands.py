@@ -149,6 +149,21 @@ def _reg() -> tuple[CommandSpec, ...]:
             details="FR #68/#113: drops focus entries; !unfocus all clears repos and items.",
             related=("focus", "list"),
         ),
+        CommandSpec(
+            name="recycle",
+            syntax="!recycle [machine|all]",
+            summary="document+route fleet worker recycle; local bob seat executes (not Jeeves)",
+            roles=frozenset({ROLE_BOB, ROLE_SIMON}),
+            example="!recycle",
+            details=(
+                "FR #197: Jeeves documents and routes only. Authorised operator "
+                "(owner services account or authenticated bob-*). Local bob-{machine} "
+                "runs tray-equivalent steps: stop workers → owned orphan cleanup → "
+                "git ff-only → reload skills → restart. No Ergo/Jeeves host kill; "
+                "dirty git left intact and reported; duplicates cooldown-blocked."
+            ),
+            related=("help", "status"),
+        ),
     )
 
 

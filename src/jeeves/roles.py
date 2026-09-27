@@ -38,6 +38,7 @@ from .cast_iron import (
 )
 from .outbox_pos import outbox_path, resolve_outbox_start, write_pos
 from .helpcmd import HelpRateLimit, build_help, parse_help
+from .recycle import RecycleGate, decide_recycle, is_recycle, parse_recycle
 from .focus import (
     handle_focus_cmd,
     handle_unfocus_cmd,
@@ -255,6 +256,8 @@ class JeevesChair:
         self._last_stale_sweep = 0.0
         self.assign_state = ChairAssignState()
         self.assign_state.bind(self.home)
+        # FR #197: !recycle cooldown / duplicate gate (Jeeves routes only)
+        self.recycle_gate = RecycleGate()
         # Optional inject for tests: set of live worker nicks
         self.live_seats_override: set[str] | None = None
         # FR #105: NAMES membership ready for resync orphan release
@@ -555,6 +558,46 @@ class JeevesChair:
         granted = self.mode_grants.sweep_channel(ch, known)
         self.handled.append(f"sweep:{ch}:{len(granted)}")
 
+    def _handle_recycle(self, src: str, target: str, text: str) -> None:
+        """FR #197: !recycle — auth + route to local bob seat; never host ops here."""
+        from .focus import owner_account_name
+
+        ok, arg = parse_recycle(text)
+        if not ok:
+            return
+        owner = owner_account_name()
+        acct = self._account_for_nick(src)
+        # Prefer shop channel; PM falls back to #bobiverse (bob seat still owns exec).
+        channel = target if (target or "").startswith("#") else "#bobiverse"
+        decision = decide_recycle(
+            nick=src,
+            account=acct,
+            channel=channel,
+            arg=arg,
+            owner_account=owner,
+            gate=self.recycle_gate,
+        )
+        for line in decision.pm_lines:
+            self._pm(src, line)
+        if decision.ok and decision.channel_line:
+            # Shop wire for bob-{machine}; cast_iron allows RECYCLE machine=
+            self._shop_privmsg(channel, decision.channel_line)
+            self.handled.append(f"recycle_routed:{src}:{decision.reason}")
+            log.info(
+                "cmd=recycle nick=%s account=%s route=%s",
+                src,
+                acct or "none",
+                decision.channel_line[:120],
+            )
+        else:
+            self.handled.append(f"recycle_denied:{src}:{decision.reason}")
+            log.info(
+                "cmd=recycle nick=%s denied reason=%s account=%s",
+                src,
+                decision.reason,
+                acct or "none",
+            )
+
     def _account_for_nick(self, nick: str) -> str | None:
         """FR #107: services account for *this* nick (not a hard-coded simon key)."""
         if self.mode_grants is None:
@@ -735,6 +778,9 @@ class JeevesChair:
         if is_sweep(text):
             self._handle_sweep(src, target, text)
             return
+        if is_recycle(text):
+            self._handle_recycle(src, target, text)
+            return
         if not target.startswith("#"):
             if is_list(text):
                 self._handle_list(src, text)
@@ -746,6 +792,8 @@ class JeevesChair:
                 return
             elif self._handle_ignore_cmds(src, text):
                 return
+            elif is_recycle(text):
+                self._handle_recycle(src, target, text)
             return
         # FR #106: !bored → assign; ACK/DONE still recorded here.
         if is_bored(text):
