@@ -98,6 +98,36 @@ def test_decide_routes_and_cooldown():
     assert d2.reason == "cooldown"
 
 
+def test_bobiverse_bare_recycle_routes_to_ionos_not_bobiverse():
+    """Regression: !recycle in #bobiverse must not emit machine=bobiverse."""
+    d = decide_recycle(
+        nick="simon",
+        account="simon",
+        channel="#bobiverse",
+        arg=None,
+        owner_account="simon",
+        gate=RecycleGate(cooldown_s=0),
+        now=2_000_000.0,
+    )
+    assert d.ok
+    assert "machine=ionos" in d.channel_line
+    assert "machine=bobiverse" not in d.channel_line
+
+
+def test_unknown_machine_denied():
+    d = decide_recycle(
+        nick="simon",
+        account="simon",
+        channel="#bobiverse",
+        arg="nope",
+        owner_account="simon",
+        gate=RecycleGate(cooldown_s=0),
+        now=3_000_000.0,
+    )
+    assert not d.ok
+    assert d.reason == "unknown_machine"
+
+
 def test_denied_no_channel_route():
     d = decide_recycle(
         nick="evil",
