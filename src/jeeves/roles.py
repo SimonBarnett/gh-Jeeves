@@ -580,8 +580,21 @@ class JeevesChair:
         for line in decision.pm_lines:
             self._pm(src, line)
         if decision.ok and decision.channel_line:
-            # Shop wire for bob-{machine}; cast_iron allows RECYCLE machine=
+            # Always put the wire on the command channel (bob-* hear #bobiverse).
             self._shop_privmsg(channel, decision.channel_line)
+            # Also mirror onto #{machine} so the local bob shop sees it.
+            from .recycle import CHAIR_HOME_MACHINE, shop_machine
+
+            mid = ""
+            if "machine=" in decision.channel_line:
+                for tok in decision.channel_line.split():
+                    if tok.startswith("machine="):
+                        mid = tok.split("=", 1)[1].strip().lower()
+                        break
+            if mid and mid not in ("fleet", "bobiverse") and f"#{mid}" != channel.lower():
+                self._shop_privmsg(f"#{mid}", decision.channel_line)
+            elif shop_machine(channel) in ("bobiverse", "agentic_irc"):
+                self._shop_privmsg(f"#{CHAIR_HOME_MACHINE}", decision.channel_line)
             self.handled.append(f"recycle_routed:{src}:{decision.reason}")
             log.info(
                 "cmd=recycle nick=%s account=%s route=%s",
