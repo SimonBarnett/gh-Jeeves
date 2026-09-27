@@ -35,6 +35,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Install-BobJeeves.ps1 
 - [ ] In-channel `!list` / `!help` → **PM only** (no channel queue dump)
 - [ ] `GET http://127.0.0.1:<port>/bob/v1/report` shows queue + workers
 - [ ] `POST /bob/v1/git` still enqueues; 15‑minute resync does not drop concurrent webhooks
+- [ ] **FR #204 endpoint smoke** (opt-in): with `BOB_SECRET` from secret store only,
+      `python tools/test_git_endpoints.py` / `test_jira_endpoints.py` /
+      `test_report_endpoints.py` / `test_intake_endpoints.py` against
+      `https://bob.ntsa.uk` (or `BOB_SMOKE_LIVE=1 pytest … -k live`). See
+      `docs/endpoint-smoke-fr204.md`. Do not log secrets.
 
 ## TLS IRC (FR #46)
 
