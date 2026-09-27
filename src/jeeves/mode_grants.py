@@ -30,8 +30,8 @@ _JOIN = re.compile(
 _MODE = re.compile(r"(?i)^:?\S+\s+MODE\s+(\S+)\s+(\S+)(?:\s+(.*))?$")
 _ACCOUNT_NOTIFY = re.compile(r"(?i)^:?(\S+)!\S+\s+ACCOUNT\s+(\S+)")
 _WHO_315 = re.compile(r"(?i)^\S+\s+315\b")  # end of WHO
-# 354 WHOX custom — simplified: me nick account host flags
-_WHOX = re.compile(r"(?i)^:?\S+\s+354\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)")
+# 354 WHOX custom — Ergo %tcnaf returns: token channel nick account flags
+_WHOX = re.compile(r"(?i)^:?\S+\s+354\s+\S+\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)")
 # 330 WHOIS logged-in-as: :server 330 me nick account :is logged in as
 _WHOIS_330 = re.compile(r"(?i)^:?\S+\s+330\s+\S+\s+(\S+)\s+(\S+)\s+:")
 # 353 NAMES: :server 353 me = #chan :@nick1 %nick2 nick3
@@ -364,7 +364,7 @@ class ModeGrantController:
         ch = (channel or "").strip()
         if not ch.startswith("#"):
             ch = "#" + ch
-        # %t c n a f — common Ergo/Unreal WHOX fields (nick account host flags)
+        # %t c n a f — common Ergo/Unreal WHOX fields (token channel nick account flags)
         try:
             self.client.send_raw(f"WHO {ch} %tcnaf")
             self.state.events.append(f"who_sent:{ch}")
@@ -410,9 +410,14 @@ class ModeGrantController:
             return
         m = _WHOX.match(s)
         if m:
-            nick, acct, host, _flags = m.group(1), m.group(2), m.group(3), m.group(4)
-            if host and host not in ("*", "0"):
-                self.set_host(nick, host)
+            # WHOX %tcnaf: token(1) channel(2) nick(3) account(4) flags(5)
+            token, channel, nick, acct, _flags = (
+                m.group(1),
+                m.group(2),
+                m.group(3),
+                m.group(4),
+                m.group(5),
+            )
             if acct and acct not in ("*", "0"):
                 self.set_account(nick, acct)
                 for ch in set(self.state.modes.keys()) | set(self.state.pending_sweep):
