@@ -40,9 +40,10 @@ and Jeeves assign-on-`!bored` (FR #106). Item `owner/repo#N` beats repo focus.
 |-------|----------------|
 | issue opened / reopened | enqueue **FR** |
 | PR opened (`Closes/Fixes/Resolves #n`) | drop FR #n; enqueue **MRB** |
-| PR merged (MRB PASS) | drop MRB; enqueue **UAT** |
+| PR merged (MRB PASS) | drop MRB; enqueue **UAT** (worker vision-fidelity; FR #187) |
 | PR closed unmerged | drop MRB; restore **FR** if issue still open |
 | `DONE MRB … FAIL` | restore **FR**; `mrb_fail_hold` (K15 / FR #16) |
+| `DONE UAT … PASS\|FAIL` | UAT row → done + idle (worker stamp; not Bob-only) |
 | issue closed | drop FR/UAT unless `mrb_fail_hold` |
 
 Replay is idempotent. Live source of truth is the GitHub webhook; `queue.json`

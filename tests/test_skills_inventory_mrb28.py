@@ -19,6 +19,7 @@ REQUIRED = (
     "jeeves-token-less-gate",
     "jeeves-shop-protocol",
     "jeeves-task-modes",
+    "jeeves-uat",
     "jeeves-irc-roles",
 )
 

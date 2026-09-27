@@ -16,8 +16,9 @@ Agent-controllable surface for operating, diagnosing, and changing Jeeves.
 | [jeeves-release](jeeves-release/SKILL.md) | Tag, deploy, G2, roll back | #22 |
 | [jeeves-token-less-gate](jeeves-token-less-gate/SKILL.md) | Run G1 local E2E and G2 live smoke | #23, #1 |
 | [jeeves-shop-protocol](jeeves-shop-protocol/SKILL.md) | `#{machine}` wire: `!bored` → Jeeves assign → ACK → DONE | #1, #106, #146 |
-| [jeeves-task-modes](jeeves-task-modes/SKILL.md) | FR / MRB / UAT contract; MRB tests-first, docs PR on PASS, fix PR on FAIL | #1 |
-| [jeeves-mrb-gates](jeeves-mrb-gates/SKILL.md) | MRB #1 vision fit (issues) + MRB #2 implementation (PRs) | #151, #92 |
+| [jeeves-task-modes](jeeves-task-modes/SKILL.md) | FR / MRB / UAT contract; MRB tests-first, docs PR on PASS, fix PR on FAIL | #1, #187 |
+| [jeeves-uat](jeeves-uat/SKILL.md) | Vision-fidelity UAT of `main` after MRB PASS; worker `DONE UAT` (not Bob-only) | #187 |
+| [jeeves-mrb-gates](jeeves-mrb-gates/SKILL.md) | MRB #1 vision fit (issues) + MRB #2 implementation (PRs); UAT worker stamp | #151, #92, #187 |
 | [jeeves-irc-roles](jeeves-irc-roles/SKILL.md) | Nicks, channels, secrets and token-free listening | — |
 
 Foundation twin: `.grok/skills/harvest-agent-skills` → `skills/harvest`.

@@ -72,7 +72,7 @@ Jeeves has no product UI. Mocks represent the `!list` / health text view for the
 - S1 = brief section 0 G1/G2 gate
 - CAST IRON: announce only on #bobiverse; Jeeves owns !bored → assign (FR #106); supersede table; own Windows service
 - Scope: announce, queue+supersede, shop assign + ACK/DONE, !list, webhook writer, GIT receiver, service installer, G1 tests, skills overlay
-- Non-goals: LLM features, Ergo config, TipForm UI, worker implementation, human UAT stamp
+- Non-goals: LLM features, Ergo config, TipForm UI, worker implementation packs (fleet books). UAT is worker vision-fidelity after MRB PASS (FR #187), not a Bob-only stamp
 - Target repo: SimonBarnett/gh-Jeeves (public)
 
 ## UNKNOWN

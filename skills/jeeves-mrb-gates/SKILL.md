@@ -26,7 +26,7 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 |------|--------|----------|
 | MRB #1 | Simon (human) | Fleet seats, LLMs |
 | MRB #2 | Other seat via `mrb/verdict` | PR author seat (except one-seat CAST IRON) |
-| UAT | Bob only | MRB workers |
+| UAT (FR #187) | UAT worker via `DONE UAT … PASS\|FAIL` | MRB worker on the same merge; not a Bob-only stamp |
 
 ## Do not conflate
 
