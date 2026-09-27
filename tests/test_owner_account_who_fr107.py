@@ -51,7 +51,7 @@ def test_whox_354_sets_account_for_preexisting_nick(tmp_path: Path):
     """User present before Jeeves joined: WHOX 354 fills account."""
     ctrl = ModeGrantController(client=_RawCatch(), jeeves_nick="Jeeves")
     # Simulate WHOX reply for nick already in #marchhare
-    ctrl.handle_raw(":irc 354 Jeeves simon-laptop simon host.example Hx")
+    ctrl.handle_raw(":irc 354 Jeeves 0 #marchhare simon-laptop Hx simon")
     assert ctrl.state.accounts.get("simon-laptop") == "simon"
 
 
