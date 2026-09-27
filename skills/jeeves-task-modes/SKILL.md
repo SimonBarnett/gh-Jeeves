@@ -4,7 +4,7 @@ description: >
   Use this when a worker takes a Jeeves job and needs the FR / MRB / UAT
   contract: which mode does what, how MRB must run (tests first, hostile
   review, docs PR on PASS, one fix PR on FAIL), how each outcome drives the
-  queue supersede, or who may stamp UAT. Also /jeeves-task-modes.
+  queue supersede, or UAT vision-fidelity (FR #187). Also /jeeves-task-modes.
 ---
 
 # jeeves-task-modes
@@ -20,7 +20,7 @@ Agentic control is an overlay: the token-less path must never depend on this ski
 |------|------|-----------|
 | **FR** | Earliest open issue/FR → open a PR that references it | `DONE FR <repo>#n PR <url>` — Jeeves turns the FR into an MRB |
 | **MRB** | Hostile review of a PR | `DONE MRB <repo>#n PASS merged <url>` or `FAIL fix#m` |
-| **UAT** | After MRB PASS, a **separate** worker | Only Bob stamps UAT |
+| **UAT** | After MRB PASS, a **separate** worker checks `main` vs vision | `DONE UAT <repo>#n PASS\|FAIL <url>` — worker stamps (FR #187) |
 
 Prefer a different worker for MRB than the PR author when 2+ are free; with one
 free seat it may continue into MRB.
@@ -69,9 +69,16 @@ flowchart TD
   The fix PR must not say `Closes #n` for the FR.
 - Never stamp UAT from an MRB worker.
 
+## UAT (FR #187)
+
+Vision-fidelity of **current main** after MRB PASS. Full checklist:
+`jeeves-uat`. Worker reads `docs/vision.md` + functional spec, pokes code,
+adds tests if needed, runs the full suite, then `DONE UAT … PASS|FAIL <url>`.
+Not Bob-only. Not `design-uat` (visual mocks).
+
 ## Worker hygiene
 
 - Work arrives as Jeeves assign / ACK in your own `#{machine}`; ACK before starting.
 - Send `DONE` (or `GIVEUP`) when finished; then `!bored` again.
 
-Related: `jeeves-shop-protocol`, `jeeves-queue`.
+Related: `jeeves-shop-protocol`, `jeeves-queue`, `jeeves-uat`.

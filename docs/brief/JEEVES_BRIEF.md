@@ -96,7 +96,7 @@ Seed skills (each is a seed FR with a test or lint that checks the skill exists 
 - **Jeeves never:**
   - emits ear-style `OFFER` lines (retired);
   - reasons with an LLM on the token-less path;
-  - stamps human UAT (Bob only);
+  - assigns UAT to a worker for vision-fidelity of main (FR #187; not Bob-only);
   - posts model-owned `!bored` (workers'/monitors' line).
 - Jeeves is **integral**: critical path of the token-less fleet in **gh-Jeeves**, with its own service, tests and release cycle.
 
@@ -136,7 +136,7 @@ Seed skills (each is a seed FR with a test or lint that checks the skill exists 
 7. **MRB worker process.** Check out, read intent, add **new** tests, hostile review.
    - **PASS:** merge and **close the FR**.
    - **FAIL:** exactly **one** fix PR, merge **both**, and the FR **stays open**.
-   - **Only Bob stamps UAT.**
+   - **UAT worker stamps** via `DONE UAT … PASS|FAIL` (FR #187); not Bob-only.
 8. **`!list`**, sent by PM, returns the unaccepted queue by PM.
 9. **Ergo channel registration:**
    - `bob-{machine}` is op in `#{machine}`; `Jeeves` is op in `#bobiverse`.
@@ -249,7 +249,7 @@ stateDiagram-v2
   MRB --> UAT: MRB PASS, PR merged
   MRB --> FR: PR closed unmerged / MRB FAIL
   FR --> [*]: issue closed
-  UAT --> [*]: issue closed / Bob stamps UAT
+  UAT --> [*]: DONE UAT PASS|FAIL / issue closed
 ```
 *Caption: the queue holds only the current task per piece of work, and each GitHub event replaces it deterministically.*
 
@@ -293,7 +293,7 @@ flowchart TD
   V -->|FAIL| F[one fix PR, merge both]
   F --> O[FR stays open]
 ```
-*Caption: the standard MRB transaction; only Bob stamps UAT after a separate UAT worker.*
+*Caption: the standard MRB transaction; a separate UAT worker vision-checks main (FR #187).*
 
 ### 5.6 Deployment on ionos
 ```mermaid
@@ -385,7 +385,7 @@ Other requirements:
    - **FAIL:** **one** fix PR, merge **both**, and the FR **stays open**. No UAT.
    - **The fix PR must not say `Closes #N`** for the FR, because GitHub auto-closes the FR on merge (drain gap 7).
 6. Report busy/idle on the webhook (Jeeves derives it from ACK/DONE).
-7. Only Bob stamps UAT.
+7. UAT is worker vision-fidelity of main after MRB PASS (FR #187); worker `DONE UAT` stamps PASS/FAIL.
 
 ## 9. Webhook contracts
 - **GitHub → Bob GIT hook** (reference: `club-madeira-onboarding` hook **685447057**): URL `https://irc.ntsa.uk/bob/v1/git`, events `issues`, `pull_request`, `push`, content type `json`, active, SSL verification on, **no secret configured**. New repos, gh-Jeeves included, copy this.
@@ -468,7 +468,7 @@ Other requirements:
    - the **G1 token-less E2E** (section 0).
 9. **Docs:** README with the small mermaids above, the wire grammar and ops runbook, and a honesty-box `harvest-agent-skills` skill with `github:` pointing at gh-Jeeves.
 
-Non-goals: LLM features, Ergo config, TipForm UI, worker implementation, human UAT stamp (Bob only).
+Non-goals: LLM features, Ergo config, TipForm UI, worker implementation packs. UAT is worker-assignable (FR #187), not a human-only Bob stamp.
 
 ## 15. What stays where
 | Stays in **agentic_irc** | Stays in **agentic_build** |

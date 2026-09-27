@@ -50,7 +50,7 @@ flowchart LR
 4. Workers stay in their own shop; only `{machine}-<pid>` `!bored` is trusted.  
 5. Deterministic scripts-only path (works during token outage / Sand empty).  
 6. Supersede: FR↔MRB↔UAT per GitHub events (see diagrams).  
-7. MRB PASS closes FR; FAIL one fix PR, FR stays open; only Bob stamps UAT. Self-MRB only when one live seat.
+7. MRB PASS closes FR; FAIL one fix PR, FR stays open; **UAT** = separate worker vision-fidelity of `main` (FR #187) via `DONE UAT … PASS|FAIL` (not Bob-only). Self-MRB only when one live seat.
    **FR #151:** agent-submitted issues need **MRB #1** (Simon vision fit: `needs-mrb1` → `mrb1-pass`) before engineering.
    **FR #92 / MRB #2:** PR body needs `Seat: {nick}`. Reviewing seat posts required check **`mrb/verdict`** via
    `tools/post_mrb_verdict.py` (full `pytest tests/`, duration ≥ 10 min, reviewer ≠ author).
@@ -120,10 +120,10 @@ stateDiagram-v2
   MRB --> UAT: MRB PASS, PR merged
   MRB --> FR: PR closed unmerged / MRB FAIL
   FR --> [*]: issue closed
-  UAT --> [*]: issue closed / Bob stamps UAT
+  UAT --> [*]: DONE UAT PASS|FAIL / issue closed
 ```
 
-*Caption: the queue holds only the current task per piece of work, and each GitHub event replaces it deterministically.*
+*Caption: the queue holds only the current task per piece of work, and each GitHub event replaces it deterministically. UAT is worker-stamped (FR #187).*
 
 ### Shop claim: !bored → Jeeves assign → ACK (FR #106)
 
@@ -171,7 +171,7 @@ flowchart TD
   F --> O[FR stays open]
 ```
 
-*Caption: the standard MRB transaction; only Bob stamps UAT after a separate UAT worker.*
+*Caption: the standard MRB transaction; a separate UAT worker then vision-checks main (FR #187).*
 
 ### Deployment on ionos
 

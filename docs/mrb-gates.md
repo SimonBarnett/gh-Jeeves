@@ -64,7 +64,14 @@ Details: `docs/mrb-enforcement.md`, skill `jeeves-task-modes`.
 - Agents propose freely; humans keep vision noise out of the engineering queue.
 - Reviewers do not pay twice for the same judgment: fit once, fidelity once.
 
+## After MRB #2 PASS — UAT (FR #187)
+
+Merged `main` is then queued as **UAT**. A **separate** worker runs
+vision-fidelity against `docs/vision.md` + functional spec (`skills/jeeves-uat`)
+and stamps `DONE UAT … PASS|FAIL`. This is **not** a Bob-only human stamp and
+does **not** change MRB #1 / #2.
+
 ## Related
 
-- FR #151 (this doc), FR #92 (`mrb/verdict`), FR #26 (intake)
-- Skills: `jeeves-mrb-gates`, `jeeves-task-modes`
+- FR #151 (this doc), FR #92 (`mrb/verdict`), FR #26 (intake), FR #187 (worker UAT)
+- Skills: `jeeves-mrb-gates`, `jeeves-task-modes`, `jeeves-uat`
