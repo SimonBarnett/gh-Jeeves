@@ -295,7 +295,27 @@ class ChairAssignState:
         for row in q.get("accepted") or []:
             if str(row.get("nick") or "") == nick:
                 return AssignDecision("busy", reason="accepted")
-        if self.has_open(canon) or self.has_open(nick):
+        # FR #182: if this seat already has an open offer, rebroadcast that line.
+        # Silent skip made workers think assign was broken when they missed the first PRIVMSG.
+        open_ent = None
+        if self.has_open(canon):
+            open_ent = self.open.get(canon)
+        elif self.has_open(nick):
+            open_ent = self.open.get(nick)
+        if isinstance(open_ent, dict):
+            line = str(open_ent.get("line") or "").strip()
+            row = open_ent.get("row") if isinstance(open_ent.get("row"), dict) else None
+            if not line and isinstance(row, dict):
+                line = format_assign_line(
+                    nick, row, chair_nick=chair_nick, channel=channel
+                )
+            if line:
+                return AssignDecision(
+                    "open",
+                    line=line,
+                    reason="one_open_offer",
+                    row=dict(row) if isinstance(row, dict) else None,
+                )
             return AssignDecision("open", reason="one_open_offer")
 
         live = set(live_nicks or ())

@@ -921,6 +921,17 @@ class JeevesChair:
             self.handled.append(f"assign:{src}:{decision.line}")
             log.info("event=assign nick=%s line=%s", src, decision.line[:120])
             return
+        # FR #182: rebroadcast outstanding offer on repeat !bored (do not go silent).
+        if decision.action == "open" and decision.line:
+            self._shop_privmsg(target, decision.line)
+            self.handled.append(f"assign_rebroadcast:{src}:{decision.line}")
+            log.info(
+                "event=assign_rebroadcast nick=%s reason=%s line=%s",
+                src,
+                decision.reason,
+                decision.line[:120],
+            )
+            return
         if decision.action == "nothing" and decision.line:
             self._shop_privmsg(target, decision.line)
             self.handled.append(f"assign_empty:{src}")
