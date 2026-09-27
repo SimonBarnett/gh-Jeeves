@@ -17,9 +17,14 @@ from typing import Any
 
 # Live seats: flamingo-46804, marchhare-34992, ce-priority-dev1-99
 # Machine segment is greedy up to the final -<digits> pid.
-_MACHINE_PID = re.compile(r"^([a-z0-9](?:[a-z0-9_-]*[a-z0-9])?)-(\d+)$", re.I)
+# Optional trailing _<tag> (e.g. marchhare-36340_l) seen on some multi-client /
+# listen seats — strip for trust/assign (FR #182).
+_MACHINE_PID = re.compile(
+    r"^([a-z0-9](?:[a-z0-9_-]*[a-z0-9])?)-(\d+)(?:_[a-z0-9]+)?$",
+    re.I,
+)
 # Legacy shop workers: w-fla-12345 / w-mh-1
-_LEGACY_W = re.compile(r"^w-([a-z0-9]+)-(\d+)$", re.I)
+_LEGACY_W = re.compile(r"^w-([a-z0-9]+)-(\d+)(?:_[a-z0-9]+)?$", re.I)
 
 # Never treat these as worker nicks (chair, ears, humans).
 _RESERVED_EXACT = frozenset(
