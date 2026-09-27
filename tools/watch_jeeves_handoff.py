@@ -491,8 +491,44 @@ def run_scan(
     )
 
 
-def emit_alerts(result: ScanResult, alert_path: Path, *, also_stdout: bool) -> None:
+def _alert_state_path(alert_path: Path) -> Path:
+    return alert_path.with_suffix(alert_path.suffix + ".state.json")
+
+
+def _load_alert_state(path: Path) -> dict[str, float]:
+    doc = load_json(path)
+    out: dict[str, float] = {}
+    raw = doc.get("emitted") if isinstance(doc.get("emitted"), dict) else {}
+    for k, v in raw.items():
+        try:
+            out[str(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _save_alert_state(path: Path, emitted: dict[str, float]) -> None:
+    # Drop entries older than 6h
+    now = time.time()
+    kept = {k: v for k, v in emitted.items() if (now - v) < 6 * 3600}
+    path.write_text(
+        json.dumps({"v": 1, "emitted": kept}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def emit_alerts(
+    result: ScanResult,
+    alert_path: Path,
+    *,
+    also_stdout: bool,
+    dedupe_s: float = 30 * 60,
+) -> None:
+    """Append findings; re-emit the same kind/nick/row_key at most every dedupe_s."""
     alert_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path = _alert_state_path(alert_path)
+    emitted = _load_alert_state(state_path)
+    now = time.time()
     lines: list[str] = []
     if not result.findings:
         lines.append(
@@ -500,16 +536,26 @@ def emit_alerts(result: ScanResult, alert_path: Path, *, also_stdout: bool) -> N
             f"accepted={result.accepted} unaccepted={result.unaccepted}"
         )
     for f in result.findings:
+        key = f"{f.kind}|{f.nick}|{f.row_key}|{f.detail}"
+        last = emitted.get(key)
+        if last is not None and (now - last) < float(dedupe_s):
+            continue
+        emitted[key] = now
         lines.append(
             f"{result.ts} {f.severity.upper()} kind={f.kind} nick={f.nick or '-'} "
             f"row_key={f.row_key or '-'} detail={f.detail}"
             + (f" evidence={f.evidence}" if f.evidence else "")
         )
-    text = "\n".join(lines) + "\n"
-    with alert_path.open("a", encoding="utf-8") as fh:
-        fh.write(text)
-    if also_stdout:
-        sys.stdout.write(text)
+    if lines:
+        text = "\n".join(lines) + "\n"
+        with alert_path.open("a", encoding="utf-8") as fh:
+            fh.write(text)
+        if also_stdout:
+            sys.stdout.write(text)
+    try:
+        _save_alert_state(state_path, emitted)
+    except OSError:
+        pass
 
 
 def main(argv: list[str] | None = None) -> int:
