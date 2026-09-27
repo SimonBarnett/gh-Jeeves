@@ -11,6 +11,7 @@ Local machine / ionos only. **Never** edit Ergo or restart unrelated services fr
 | POST `/bob/v1/report` | Requires **`X-Bob-Secret`** → 401 if missing/wrong (when secret configured / `bob.secret` present) |
 | POST `/bob/v1/git` | **No** `X-Bob-Secret` (fleet hooks carry no secret; vision Trust / BRIEF). Secret-field filter (K14) only |
 | POST `/bob/v1/intake` | Requires **`X-Bob-Secret`** when secret configured |
+| POST `/bob/v1/jira` | Requires **`X-Bob-Secret`** when secret configured (FR #190). Native Jira payload; persist under digest home `jira/`; chair announce; **204** on success |
 | Secret source | `BOB_CALLBACK_SECRET` / `BOB_SECRET` env, or `bob.secret` file under digest home — **never logged** |
 
 ## Cutover (ionos)

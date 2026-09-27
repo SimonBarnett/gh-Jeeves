@@ -1,4 +1,4 @@
-"""GIT + report + intake webhook receiver (G1 stub + FR #47 bobcallback drop-in)."""
+"""GIT + report + intake + Jira webhook receiver (G1 stub + FR #47 bobcallback drop-in)."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from .intake import (
     get_intake_status,
     process_intake,
 )
+from .jira_webhook import process_jira_webhook
 from .queue import apply_queue_event
 
 
@@ -104,7 +105,7 @@ def make_handler(state: DigestState):
             return {k: v for k, v in self.headers.items()}
 
         def _require_write_secret(self) -> bool:
-            """FR #47: report/intake POSTs need X-Bob-Secret when require_secret."""
+            """FR #47 / #190: report/intake/jira POSTs need X-Bob-Secret when require_secret."""
             if not state.require_secret:
                 return True
             return check_bob_secret(self._hdrs(), state.bob_secret)
@@ -166,14 +167,55 @@ def make_handler(state: DigestState):
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
-            # Report/intake writes need X-Bob-Secret when configured.
+            # Report/intake/jira writes need X-Bob-Secret when configured.
             # /bob/v1/git must NOT — fleet GitHub hooks carry no secret (vision Trust;
             # BRIEF: "no HMAC (the fleet hooks carry no secret)").
-            if path in ("/bob/v1/report", "/bob/v1/intake", "/bob/v1/intake/"):
+            if path in (
+                "/bob/v1/report",
+                "/bob/v1/intake",
+                "/bob/v1/intake/",
+                "/bob/v1/jira",
+            ):
                 if not self._require_write_secret():
                     self.send_response(401)
                     self.end_headers()
                     return
+            if path == "/bob/v1/jira":
+                # FR #190: customer Jira Automation → native payload; 204 on success.
+                def _send_jira_400(reason: str) -> None:
+                    body = reason.encode("utf-8")
+                    self.send_response(400)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                payload, jerr = self._read_git_json()
+                if jerr or payload is None:
+                    _log.warning("jira_webhook_reject reason=%s", jerr or "invalid_json")
+                    _send_jira_400(jerr or "invalid_json")
+                    return
+                with state.lock:
+                    lines, records, reject = process_jira_webhook(
+                        payload, home=state.home
+                    )
+                    if reject:
+                        _log.warning("jira_webhook_reject reason=%s", reject)
+                        _send_jira_400(reject)
+                        return
+                    for line in lines:
+                        state.announces.append(line)
+                        state.append_outbox(line)
+                    state.events.append(
+                        {
+                            "jira": True,
+                            "count": len(records),
+                            "keys": [r.get("key") for r in records],
+                        }
+                    )
+                self.send_response(204)
+                self.end_headers()
+                return
             if path == "/bob/v1/git":
                 # FR #15 / agentic_irc #206: 400 only for malformed requests (missing
                 # event header / invalid JSON). Secret *mentions* in title/body must
