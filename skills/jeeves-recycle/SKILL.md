@@ -1,20 +1,27 @@
 ---
 name: jeeves-recycle
 description: >
-  !recycle is documented and routed by Jeeves; the local bob-{machine} seat
-  executes the tray-equivalent worker recycle. Triggers: !recycle, !help recycle,
-  fleet worker recycle, FR #197, or /jeeves-recycle.
+  !recycle / !recycle {machine} / !recycle all — Jeeves routes; bob-{machine}
+  executes. Triggers: !recycle, !help recycle, FR #197, FR #211, /jeeves-recycle.
 github: https://github.com/SimonBarnett/gh-Jeeves
 ---
 
-# !recycle (FR #197)
+# !recycle (FR #197 / #211)
+
+## Forms
+
+| Command | Scope |
+|---------|--------|
+| `!recycle` | **All** fleet seats (`machine=fleet scope=fleet`) |
+| `!recycle all` | Same as bare |
+| `!recycle {machine}` | One box only (`flamingo` / `marchhare` / `ionos` / `dev1`) |
 
 ## Ownership
 
 | Layer | Does |
 |-------|------|
-| **Jeeves** | Documents in `!help` / `!help recycle`. Authorises. Emits shop wire `RECYCLE machine=… exec=local-bob-seat`. **Never** kills processes, runs git, or reloads skills. |
-| **Local `bob-{machine}`** | Validates the route targets this host. Runs tray-equivalent ordered steps via authenticated local control. |
+| **Jeeves** | Documents in `!help`. Authorises. Emits `RECYCLE machine=… exec=local-bob-seat`. **Never** kills processes, runs git, or reloads skills. |
+| **Local `bob-{machine}`** | Matches route (or fleet). Announces restarting, then runs tray-equivalent steps. |
 
 ## Authorisation
 

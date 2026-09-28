@@ -29,10 +29,15 @@ FLEET_RECYCLE_MACHINES: tuple[str, ...] = (
     "ionos",
     "ce-priority-dev1",
 )
-# Channels that are not a shop — bare !recycle here means chair home (ionos).
+# Non-shop channels (never a machine id).
 NON_SHOP_CHANNELS = frozenset({"bobiverse", "agentic_irc"})
 
 _RECYCLE_RE = re.compile(r"^!+\s*recycle(?:\s+(\S+))?\s*$", re.I)
+_MACHINE_ALIASES = {
+    "dev1": "ce-priority-dev1",
+    "ce-dev1": "ce-priority-dev1",
+    "priority-dev1": "ce-priority-dev1",
+}
 
 # Duplicate prevention: one open recycle route per machine within this window.
 DEFAULT_RECYCLE_COOLDOWN_S = 120.0
@@ -60,26 +65,33 @@ def shop_machine(channel: str) -> str:
     return ch
 
 
-def resolve_recycle_target_machine(channel: str, arg: str | None) -> tuple[str, str]:
-    """Return ``(machine_id, scope)`` for the RECYCLE wire.
+def normalize_fleet_machine(token: str) -> str | None:
+    """Case-insensitive fleet member id, or None if unknown."""
+    mid = shop_machine(token)
+    if not mid or mid in NON_SHOP_CHANNELS:
+        return None
+    mid = _MACHINE_ALIASES.get(mid, mid)
+    if mid in FLEET_RECYCLE_MACHINES:
+        return mid
+    return None
 
-    CAST IRON: never emit ``machine=bobiverse``. Bare ``!recycle`` in
-    ``#bobiverse`` / ``#agentic_irc`` routes to the chair home (``ionos``).
+
+def resolve_recycle_target_machine(channel: str, arg: str | None) -> tuple[str, str]:
+    """Return ``(machine_id, scope)`` for the RECYCLE wire (FR #211).
+
+    - ``!recycle`` / ``!recycle all`` → fleet-wide (``machine=fleet scope=fleet``)
+    - ``!recycle {machinename}`` → that fleet member only (``scope=local``)
+
+    CAST IRON: never emit ``machine=bobiverse``.
     """
-    scope = "local"
-    mid = shop_machine(channel)
-    if arg in ("all", "fleet"):
+    raw = (arg or "").strip().lower() or None
+    if raw is None or raw in ("all", "fleet"):
         return "fleet", "fleet"
-    if arg:
-        mid = shop_machine(arg)
-    if mid in NON_SHOP_CHANNELS or mid in ("", "unknown"):
-        mid = CHAIR_HOME_MACHINE
-    if mid == "dev1":
-        mid = "ce-priority-dev1"
-    if mid not in FLEET_RECYCLE_MACHINES and mid != "fleet":
-        # Unknown token — still emit so bob can refuse; caller may deny.
-        pass
-    return mid, scope
+    mid = normalize_fleet_machine(raw)
+    if mid is None:
+        # Preserve raw for unknown_machine error text.
+        return shop_machine(raw) or raw, "local"
+    return mid, "local"
 
 
 def format_recycle_route(*, machine: str, requester: str, scope: str = "local") -> str:
@@ -195,7 +207,10 @@ def decide_recycle(
         return RecycleDecision(
             ok=False,
             reason="no_machine",
-            pm_lines=["recycle: usage !recycle [machine|all] (in #{machine} shop)"],
+            pm_lines=[
+                "recycle: usage !recycle [machine|all] "
+                f"(machines: {', '.join(FLEET_RECYCLE_MACHINES)})"
+            ],
         )
     if mid not in FLEET_RECYCLE_MACHINES and mid != "fleet":
         return RecycleDecision(
@@ -217,13 +232,21 @@ def decide_recycle(
         )
     route = format_recycle_route(machine=mid, requester=nick, scope=scope)
     steps = ", ".join(s["id"] for s in recycle_steps())
+    if scope == "fleet":
+        ack = (
+            "Recycling all seats "
+            f"({', '.join(FLEET_RECYCLE_MACHINES)})…"
+        )
+    else:
+        ack = f"Recycling {mid}…"
     return RecycleDecision(
         ok=True,
         reason=why,
         route=route,
         channel_line=route,
         pm_lines=[
-            f"recycle: routed to local bob seat ({scope} {mid}); Jeeves runs no host ops",
+            ack,
+            f"recycle: routed to bob seat(s) ({scope} {mid}); Jeeves runs no host ops",
             f"recycle: steps={steps}",
             "recycle: bob must announce restarting then execute (deterministic)",
         ],

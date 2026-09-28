@@ -152,15 +152,14 @@ def _reg() -> tuple[CommandSpec, ...]:
         CommandSpec(
             name="recycle",
             syntax="!recycle [machine|all]",
-            summary="document+route fleet worker recycle; local bob seat executes (not Jeeves)",
+            summary="route recycle to bob seats: bare/all = fleet; machine = one box",
             roles=frozenset({ROLE_BOB, ROLE_SIMON}),
-            example="!recycle",
+            example="!recycle marchhare",
             details=(
-                "FR #197: Jeeves documents and routes only. Authorised operator "
-                "(owner services account or authenticated bob-*). Local bob-{machine} "
-                "runs tray-equivalent steps: stop workers → owned orphan cleanup → "
-                "git ff-only → reload skills → restart. No Ergo/Jeeves host kill; "
-                "dirty git left intact and reported; duplicates cooldown-blocked."
+                "FR #197/#211: Jeeves routes only. Bare !recycle or !recycle all → "
+                "all fleet seats. !recycle {machine} → that machine only "
+                "(flamingo|marchhare|ionos|dev1). Local bob-* announces restarting "
+                "then executes. No Ergo host kill; duplicates cooldown-blocked."
             ),
             related=("help", "status"),
         ),

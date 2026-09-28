@@ -25,7 +25,8 @@ def test_registry_lists_recycle():
     spec = get_command("recycle")
     assert spec is not None
     assert "!recycle" in spec.syntax
-    assert "local bob" in spec.summary.lower() or "bob seat" in spec.details.lower()
+    joined = (spec.summary + " " + spec.details).lower()
+    assert "bob" in joined and ("seat" in joined or "local" in joined)
     assert "simon" in spec.roles or "bob" in spec.roles
 
 
@@ -70,6 +71,7 @@ def test_authorize_requires_account():
 def test_decide_routes_and_cooldown():
     gate = RecycleGate(cooldown_s=60)
     now = 1_000_000.0
+    # FR #211: bare !recycle = all seats (fleet), even when typed in a shop.
     d = decide_recycle(
         nick="simon",
         account="simon",
@@ -80,10 +82,12 @@ def test_decide_routes_and_cooldown():
         now=now,
     )
     assert d.ok
-    assert d.channel_line.startswith("RECYCLE machine=marchhare")
+    assert d.channel_line.startswith("RECYCLE machine=fleet")
+    assert "scope=fleet" in d.channel_line
     assert "exec=local-bob-seat" in d.channel_line
     assert shop_egress_allowed_for_chair(d.channel_line)
     assert is_recycle_egress(d.channel_line)
+    assert any("Recycling all seats" in ln for ln in d.pm_lines)
 
     d2 = decide_recycle(
         nick="simon",
@@ -98,8 +102,8 @@ def test_decide_routes_and_cooldown():
     assert d2.reason == "cooldown"
 
 
-def test_bobiverse_bare_recycle_routes_to_ionos_not_bobiverse():
-    """Regression: !recycle in #bobiverse must not emit machine=bobiverse."""
+def test_bobiverse_bare_recycle_is_fleet_not_bobiverse_machine():
+    """FR #211: bare !recycle = all; never emit machine=bobiverse."""
     d = decide_recycle(
         nick="simon",
         account="simon",
@@ -110,8 +114,53 @@ def test_bobiverse_bare_recycle_routes_to_ionos_not_bobiverse():
         now=2_000_000.0,
     )
     assert d.ok
-    assert "machine=ionos" in d.channel_line
+    assert "machine=fleet" in d.channel_line
+    assert "scope=fleet" in d.channel_line
     assert "machine=bobiverse" not in d.channel_line
+
+
+def test_targeted_machine_recycle():
+    d = decide_recycle(
+        nick="simon",
+        account="simon",
+        channel="#bobiverse",
+        arg="MarchHare",
+        owner_account="simon",
+        gate=RecycleGate(cooldown_s=0),
+        now=2_100_000.0,
+    )
+    assert d.ok
+    assert d.channel_line == (
+        "RECYCLE machine=marchhare by=simon scope=local exec=local-bob-seat"
+    )
+    assert any("Recycling marchhare" in ln for ln in d.pm_lines)
+
+    d_dev1 = decide_recycle(
+        nick="simon",
+        account="simon",
+        channel="#bobiverse",
+        arg="dev1",
+        owner_account="simon",
+        gate=RecycleGate(cooldown_s=0),
+        now=2_200_000.0,
+    )
+    assert d_dev1.ok
+    assert "machine=ce-priority-dev1" in d_dev1.channel_line
+
+
+def test_recycle_all_alias():
+    d = decide_recycle(
+        nick="simon",
+        account="simon",
+        channel="#ionos",
+        arg="all",
+        owner_account="simon",
+        gate=RecycleGate(cooldown_s=0),
+        now=2_300_000.0,
+    )
+    assert d.ok
+    assert "machine=fleet" in d.channel_line
+    assert "scope=fleet" in d.channel_line
 
 
 def test_unknown_machine_denied():
