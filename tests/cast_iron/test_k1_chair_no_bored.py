@@ -43,6 +43,11 @@ def test_k1_forbidden_egress_legacy_offer_still_blocked():
     )
     assert not is_forbidden_shop_egress("flamingo-1: nothing queued")
     assert shop_egress_allowed_for_chair("flamingo-1: nothing queued")
+    # FR #215: exact pong is allowed shop egress
+    assert shop_egress_allowed_for_chair("pong")
+    assert shop_egress_allowed_for_chair("PONG")
+    assert not shop_egress_allowed_for_chair("pong extra")
+    assert not is_forbidden_shop_egress("pong")
 
 
 def test_k1_source_scan_no_legacy_chair_claim_handlers():

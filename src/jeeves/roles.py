@@ -75,7 +75,9 @@ from .wire import (
     parse_done,
     parse_list_filters,
     parse_nack,
+    parse_ping,
     parse_sweep,
+    ping_matches,
 )  # noqa: F401
 
 log = logging.getLogger("jeeves.chair")
@@ -783,6 +785,24 @@ class JeevesChair:
         return False
 
     def _handle_shop(self, src: str, target: str, text: str) -> None:
+        # FR #215: ping → pong (channel or PM); optional nick glob
+        ping_ok, ping_pat = parse_ping(text)
+        if ping_ok:
+            if ping_pat is None or ping_matches(ping_pat, self.nick):
+                if target.startswith("#"):
+                    self._shop_privmsg(target, "pong")
+                    reply_to = target
+                else:
+                    self._pm(src, "pong")
+                    reply_to = src
+                log.info(
+                    "cmd=ping nick=%s target=%s pattern=%s",
+                    src,
+                    reply_to,
+                    ping_pat if ping_pat is not None else "*",
+                )
+                self.handled.append(f"ping:{src}:{reply_to}")
+            return
         # !help from channel or PM → reply by PM only (no channel flood)
         if is_help(text) or parse_help(text)[0]:
             self._handle_help(src, text)

@@ -207,3 +207,37 @@ def parse_nack(body: str) -> tuple[str, str, str, str] | None:
     if not m:
         return None
     return m.group(1).upper(), m.group(2).upper(), m.group(3), m.group(4)
+
+
+# FR #215: ping / ping <glob> → pong (chair). Not !ping; bare word only.
+_PING = re.compile(r"^ping(?:\s+(\S+))?\s*$", re.I)
+
+
+def parse_ping(text: str) -> tuple[bool, str | None]:
+    """Parse a ping line.
+
+    Returns ``(ok, pattern)``:
+    - ``(False, None)`` — not a ping command (ignore).
+    - ``(True, None)`` — bare ``ping`` (always reply).
+    - ``(True, pattern)`` — ``ping <pattern>`` (one arg; match against nick).
+
+    Rejects ``pingpong``, ``ping a b``, and other non-exact forms.
+    """
+    m = _PING.match((text or "").strip())
+    if not m:
+        return False, None
+    return True, m.group(1)
+
+
+def ping_matches(pattern: str, nick: str) -> bool:
+    """Case-insensitive glob match of ``pattern`` against ``nick``.
+
+    ``*`` = any run of characters, ``?`` = one character. All other
+    characters (including ``[`` / ``]``) are literal — do not use raw
+    ``fnmatch`` (character classes would mis-handle IRC nicks).
+    """
+    if pattern is None:
+        return True
+    esc = re.escape(pattern)
+    rx = esc.replace(r"\*", ".*").replace(r"\?", ".")
+    return bool(re.fullmatch(rx, nick or "", re.I))
