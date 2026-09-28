@@ -92,6 +92,9 @@ def empty_machine(mid: str) -> dict[str, Any]:
         "period_end": "",
         "cursor_label": "",
         "cursor_period_end": "",
+        # agentic_build #456: Sand / grok-chat weekly reset (≠ Cursor billingCycleEnd).
+        "sand_period_end": "",
+        "cursor_pools": [],
         "overage_gbp": None,
     }
 
@@ -209,6 +212,7 @@ def coerce_machine(mid: str, raw: Any) -> dict[str, Any]:
         "period_end",
         "cursor_label",
         "cursor_period_end",
+        "sand_period_end",
         "overage_gbp",
         "remaining_pct",
         "account_remaining_pct",
@@ -226,8 +230,13 @@ def coerce_machine(mid: str, raw: Any) -> dict[str, Any]:
         base["period_end"] = str(raw["period_end"])
     if raw.get("cursor_period_end"):
         base["cursor_period_end"] = str(raw["cursor_period_end"])
+    if raw.get("sand_period_end"):
+        base["sand_period_end"] = str(raw["sand_period_end"])
     if raw.get("cursor_label"):
         base["cursor_label"] = str(raw["cursor_label"])
+    # agentic_build #456: per-pool remaining + period_end (grok-chat weekly vs high/auto billing)
+    if isinstance(raw.get("cursor_pools"), list):
+        base["cursor_pools"] = raw["cursor_pools"]
     try:
         base["running"] = int(base.get("running") or 0)
     except (TypeError, ValueError):
@@ -742,6 +751,7 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
                 "period_end",
                 "cursor_label",
                 "cursor_period_end",
+                "sand_period_end",
                 "overage_gbp",
                 "remaining_pct",
                 "account_remaining_pct",
@@ -759,8 +769,13 @@ def apply_report(home: Path, payload: dict[str, Any], *, briefer: str = "") -> C
                 ent["period_end"] = str(payload["period_end"])
             if payload.get("cursor_period_end"):
                 ent["cursor_period_end"] = str(payload["cursor_period_end"])
+            if payload.get("sand_period_end"):
+                ent["sand_period_end"] = str(payload["sand_period_end"])
             if payload.get("cursor_label"):
                 ent["cursor_label"] = str(payload["cursor_label"])
+            # agentic_build #456: keep each Bob's per-pool remaining + period_end
+            if isinstance(payload.get("cursor_pools"), list):
+                ent["cursor_pools"] = payload["cursor_pools"]
             # nested worker update by pid
             pid_raw = payload.get("pid")
             if pid_raw is not None and str(pid_raw) != "":
