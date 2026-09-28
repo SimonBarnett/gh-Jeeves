@@ -72,9 +72,14 @@ def is_recycle_egress(text: str) -> bool:
     return bool(re.match(r"(?i)^RECYCLE\s+machine=", t))
 
 
+def is_pong_egress(text: str) -> bool:
+    """FR #215: chair may reply exactly ``pong`` to ping in shops / #bobiverse."""
+    return (text or "").strip().lower() == "pong"
+
+
 def shop_egress_allowed_for_chair(text: str) -> bool:
-    """Chair may PRIVMSG shops for FR #106 assign / nothing-queued, or FR #197 RECYCLE."""
-    return is_assign_egress(text) or is_recycle_egress(text)
+    """Chair may PRIVMSG shops for assign / nothing-queued, RECYCLE, or pong."""
+    return is_assign_egress(text) or is_recycle_egress(text) or is_pong_egress(text)
 
 
 def scan_source_for_forbidden_chair_handlers(root: Path | None = None) -> list[str]:
