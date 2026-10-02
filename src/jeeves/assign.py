@@ -156,21 +156,19 @@ def mrb_blocked_for_author(
     nick: str,
     live_nicks: set[str] | frozenset[str],
 ) -> bool:
-    """Don't offer MRB to PR author seat when another live seat exists."""
+    """Never offer MRB to the PR author seat (FR #224).
+
+    ``live_nicks`` is kept for call-site compatibility; another idle worker
+    must pick the job (or the author hears ``nothing queued`` until one appears).
+    """
+    del live_nicks  # API stable; sole-seat self-MRB is no longer allowed.
     if str(row.get("task") or "").upper() != "MRB":
         return False
     author = author_seat_of(row)
     if not author:
         return False
     me = (canonical_worker_nick(nick) or nick).lower()
-    if author.lower() != me:
-        return False
-    others = {
-        (canonical_worker_nick(n) or n).lower()
-        for n in live_nicks
-        if is_worker_nick(n) and (canonical_worker_nick(n) or n).lower() != me
-    }
-    return len(others) > 0
+    return author.lower() == me
 
 
 @dataclass

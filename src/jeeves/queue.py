@@ -83,6 +83,7 @@ class Claim:
     refs: tuple[str, ...] = ()  # linked issue ids e.g. ("#19",) when PR supersedes FR
     pr_id: str = ""  # pull request #n when claim is about a PR (MRB/UAT/RESTORE)
     merged: bool | None = None
+    author_seat: str = ""  # FR #224: worker nick that opened the PR (DONE FR path)
 
     @property
     def key(self) -> str:
@@ -468,6 +469,8 @@ def _append_unaccepted(doc: dict, claim: Claim, **extra: Any) -> None:
         row["pr_id"] = claim.pr_id
     if claim.merged is not None:
         row["merged"] = claim.merged
+    if claim.author_seat:
+        row["author_seat"] = str(claim.author_seat).strip()
     row.update({k: v for k, v in extra.items() if v is not None})
     # de-dupe same key
     _remove_matching(
@@ -1110,6 +1113,7 @@ def _complete_job_locked(
                     url=url,
                     refs=(fr_id,),
                     pr_id=pr_id,
+                    author_seat=nick_s,  # FR #224: block this seat from self-MRB
                 ),
             )
     return "done", match
