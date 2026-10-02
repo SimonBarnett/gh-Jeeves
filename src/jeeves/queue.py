@@ -83,6 +83,7 @@ class Claim:
     refs: tuple[str, ...] = ()  # linked issue ids e.g. ("#19",) when PR supersedes FR
     pr_id: str = ""  # pull request #n when claim is about a PR (MRB/UAT/RESTORE)
     merged: bool | None = None
+    require_machine: str = ""  # bobiverse#168: e.g. ionos for chair/outbox jobs
 
     @property
     def key(self) -> str:
@@ -354,6 +355,9 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
                     title[:80],
                 )
                 return None
+            from .capability import infer_require_machine
+
+            req = infer_require_machine(title=title, body=body, labels=labels) or ""
             return Claim(
                 repo=full,
                 task="FR",
@@ -362,6 +366,7 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
                 action=action,
                 line=title,
                 url=url,
+                require_machine=req,
             )
         if action == "closed":
             return Claim(
@@ -468,6 +473,8 @@ def _append_unaccepted(doc: dict, claim: Claim, **extra: Any) -> None:
         row["pr_id"] = claim.pr_id
     if claim.merged is not None:
         row["merged"] = claim.merged
+    if claim.require_machine:
+        row["require_machine"] = str(claim.require_machine).strip().lower()
     row.update({k: v for k, v in extra.items() if v is not None})
     # de-dupe same key
     _remove_matching(

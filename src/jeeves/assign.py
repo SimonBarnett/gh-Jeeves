@@ -28,6 +28,7 @@ from .nicks import (
     parse_worker_nick,
     worker_shop_channel,
 )
+from .capability import row_blocked_for_machine
 from .queue import load_queue, ordered_unaccepted, tasks_equivalent, worker_state
 
 log = logging.getLogger("jeeves.assign")
@@ -369,6 +370,9 @@ class ChairAssignState:
             if key in accepted_keys:
                 continue
             if key in offered:
+                continue
+            # bobiverse#168: chair/outbox jobs only to the capable machine (ionos).
+            if row_blocked_for_machine(row, nick):
                 continue
             if mrb_blocked_for_author(row, nick, live):
                 continue
