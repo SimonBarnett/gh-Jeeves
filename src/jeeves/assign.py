@@ -157,21 +157,55 @@ def mrb_blocked_for_author(
     nick: str,
     live_nicks: set[str] | frozenset[str],
 ) -> bool:
-    """Don't offer MRB to PR author seat when another live seat exists."""
+    """Never offer MRB to the PR author seat (FR #224 / #226).
+
+    ``live_nicks`` kept for call-site compatibility; sole-seat self-MRB is not allowed.
+    """
+    del live_nicks  # API stable; sole-seat self-MRB is no longer allowed.
     if str(row.get("task") or "").upper() != "MRB":
         return False
     author = author_seat_of(row)
     if not author:
         return False
     me = (canonical_worker_nick(nick) or nick).lower()
-    if author.lower() != me:
+    return author.lower() == me
+
+
+def _parse_cooldown_until(until_s: str) -> float | None:
+    s = str(until_s or "").strip()
+    if not s:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def nick_on_giveup_cooldown(row: dict[str, Any], nick: str, now: float | None = None) -> bool:
+    """FR #226: do not re-offer the same row to a nick that just GIVEUP/NACK'd it.
+
+    Per-nick ``giveup_by`` cooldowns leave the row offerable to other seats.
+    Row-wide ``cooldown_until`` is legacy (FR #180) and only applies when no
+    ``giveup_by`` map is present. ``needs_human`` is checked at the decide loop.
+    """
+    import time as _time
+
+    me = (canonical_worker_nick(nick) or nick or "").strip().lower()
+    if not me:
         return False
-    others = {
-        (canonical_worker_nick(n) or n).lower()
-        for n in live_nicks
-        if is_worker_nick(n) and (canonical_worker_nick(n) or n).lower() != me
-    }
-    return len(others) > 0
+    now_f = _time.time() if now is None else float(now)
+    giveups = row.get("giveup_by") or {}
+    if isinstance(giveups, dict) and giveups:
+        entry = giveups.get(me) or giveups.get(str(nick or "").strip().lower())
+        if not isinstance(entry, dict):
+            return False  # this nick never gave up; other seats remain free
+        until = _parse_cooldown_until(str(entry.get("cooldown_until") or ""))
+        return until is not None and now_f < until
+    # legacy row-wide cooldown_until (no per-nick map)
+    until = _parse_cooldown_until(str(row.get("cooldown_until") or ""))
+    return until is not None and now_f < until
 
 
 @dataclass
@@ -375,6 +409,10 @@ class ChairAssignState:
             if row_blocked_for_machine(row, nick):
                 continue
             if mrb_blocked_for_author(row, nick, live):
+                continue
+            if nick_on_giveup_cooldown(row, nick, now):
+                continue
+            if row.get("needs_human") in (True, "true", "1", 1):
                 continue
             # FR #133: skip jobs this seat was offered N times with no ACK.
             ak = self._attempt_key(canon, row)
