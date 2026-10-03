@@ -31,6 +31,7 @@ from .nicks import (
 from .capability import row_blocked_for_machine
 from .queue import (
     fr_already_done,
+    is_mrb_fix_pr_title,
     load_queue,
     ordered_unaccepted,
     row_skip_fr_reason,
@@ -325,6 +326,78 @@ def mrb_blocked_for_author(
     """Backward-compatible alias for ``review_blocked_for_author``."""
     return review_blocked_for_author(row, nick, live_nicks)
 
+
+def _norm_pr_id(value: Any) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    if not s.startswith("#"):
+        s = f"#{s}"
+    return s
+
+
+def mrb_row_not_offerable(row: dict[str, Any], doc: dict[str, Any] | None = None) -> bool:
+    """True when an MRB row must not be assigned (bobiverse#224).
+
+    Covers: ``merged`` flag, mrb-*-fix / fix(mrb-N) titles, and a UAT row for
+    the same PR id (merge already superseding).
+    """
+    if str(row.get("task") or "").upper() != "MRB":
+        return False
+    if row.get("merged") is True:
+        return True
+    if str(row.get("action") or "").lower() == "merged":
+        return True
+    line = str(row.get("line") or "")
+    if is_mrb_fix_pr_title(line):
+        return True
+    if doc is None:
+        return False
+    pr = _norm_pr_id(row.get("pr_id") or row.get("id"))
+    if not pr:
+        return False
+    repo = str(row.get("repo") or "")
+    for bucket in ("unaccepted", "accepted", "done"):
+        for r in doc.get(bucket) or []:
+            if not isinstance(r, dict):
+                continue
+            if str(r.get("repo") or "") != repo:
+                continue
+            if str(r.get("task") or "").upper() != "UAT":
+                continue
+            uat_pr = _norm_pr_id(r.get("pr_id") or r.get("id"))
+            if uat_pr == pr:
+                # Any UAT for this PR id means MRB for that PR is stale.
+                return True
+    return False
+
+
+def purge_stale_mrb_rows(home: Path) -> int:
+    """Drop unaccepted MRB rows that are mrb-fix titles or already merged.
+
+    Returns the number of rows removed. Persists when anything changed.
+    """
+    doc = load_queue(home)
+    before = list(doc.get("unaccepted") or [])
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for r in before:
+        if isinstance(r, dict) and mrb_row_not_offerable(r, doc):
+            removed += 1
+            log.info(
+                "event=purge_stale_mrb repo=%s id=%s line=%s",
+                r.get("repo"),
+                r.get("id"),
+                str(r.get("line") or "")[:80],
+            )
+            continue
+        kept.append(r)
+    if removed:
+        doc["unaccepted"] = kept
+        save_queue(home, doc)
+    return removed
+
+
 def _parse_cooldown_until(until_s: str) -> float | None:
     s = str(until_s or "").strip()
     if not s:
@@ -545,6 +618,9 @@ class ChairAssignState:
             return AssignDecision("open", reason="one_open_offer")
 
         live = set(live_nicks or ())
+        # bobiverse#224: drop stale merged / mrb-*-fix MRB rows before pick.
+        purge_stale_mrb_rows(home)
+        q = load_queue(home)
         offered = self.offered_keys()
         accepted_keys = {
             row_key(r)
@@ -590,6 +666,15 @@ class ChairAssignState:
             if nick_on_giveup_cooldown(row, nick, now):
                 continue
             if row.get("needs_human") in (True, "true", "1", 1):
+                continue
+            # bobiverse#224: skip merged / mrb-*-fix / UAT-superseded MRB rows.
+            if mrb_row_not_offerable(row, q):
+                log.info(
+                    "event=offer_skip_stale_mrb nick=%s job=%s line=%s",
+                    canon,
+                    key,
+                    str(row.get("line") or "")[:80],
+                )
                 continue
             # bobiverse#247: skip MRB rows without a real pull URL (or PR 404).
             if not mrb_row_offerable(row, pr_exists=pr_exists):
