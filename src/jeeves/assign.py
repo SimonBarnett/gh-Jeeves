@@ -148,16 +148,88 @@ def row_key(row: dict[str, Any]) -> str:
 
 
 def author_seat_of(row: dict[str, Any]) -> str:
-    for k in ("author_seat", "author_nick", "author"):
-        v = str(row.get(k) or "").strip()
-        if v and is_worker_nick(v):
-            return canonical_worker_nick(v) or v
-    # optional Agent: seat in line/body
+    """Primary blocked seat (legacy); prefer ``author_seats_of`` (gh-Jeeves#230)."""
+    seats = author_seats_of(row)
+    return seats[0] if seats else ""
+
+
+def author_seats_of(row: dict[str, Any]) -> list[str]:
+    """All seats that must not self-MRB / self-UAT this row (bobiverse#240 / #265 / gh-Jeeves#230)."""
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: str) -> None:
+        v = str(raw or "").strip()
+        if not v or not is_worker_nick(v):
+            return
+        nick = canonical_worker_nick(v) or v
+        key = nick.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(nick)
+
+    for k in ("implementer_seat", "mrb_author_seat", "author_seat", "author_nick", "author"):
+        _add(str(row.get(k) or ""))
+    multi = row.get("author_seats")
+    if isinstance(multi, (list, tuple)):
+        for item in multi:
+            _add(str(item or ""))
+    elif multi:
+        for part in str(multi).replace(";", ",").split(","):
+            _add(part)
     blob = f"{row.get('line') or ''} {row.get('body') or ''}"
     m = re.search(r"(?i)\bAgent:\s*([a-z0-9][a-z0-9_-]*-\d+)\b", blob)
-    if m and is_worker_nick(m.group(1)):
-        return canonical_worker_nick(m.group(1)) or m.group(1)
-    return ""
+    if m:
+        _add(m.group(1))
+    return found
+
+
+def _live_worker_nicks(live_nicks: set[str] | frozenset[str]) -> set[str]:
+    out: set[str] = set()
+    for n in live_nicks:
+        if not is_worker_nick(n):
+            continue
+        out.add((canonical_worker_nick(n) or n).lower())
+    return out
+
+
+def review_blocked_for_author(
+    row: dict[str, Any],
+    nick: str,
+    live_nicks: set[str] | frozenset[str],
+) -> bool:
+    """Block MRB/UAT for author seats (bobiverse#240 / gh-Jeeves#230).
+
+    * Exact author seat: blocked while any other worker seat is live.
+    * Same-machine sibling: blocked while another machine has a live seat.
+    * Covers ``implementer_seat`` / ``mrb_author_seat`` / legacy ``author_seat``.
+    """
+    task = str(row.get("task") or "").upper()
+    if task not in ("MRB", "UAT"):
+        return False
+    authors = author_seats_of(row)
+    if not authors:
+        return False
+    me = (canonical_worker_nick(nick) or nick).lower()
+    me_p = parse_worker_nick(nick)
+    me_mid = (me_p[0].lower() if me_p else "")
+    live = _live_worker_nicks(live_nicks)
+
+    for author in authors:
+        author_l = author.lower()
+        if author_l == me:
+            # FR #224 / #226: self-MRB always blocked, even as sole live seat.
+            if task == "MRB" or (live - {me}):
+                return True
+            continue
+        author_p = parse_worker_nick(author)
+        if author_p and me_p and author_p[0].lower() == me_mid:
+            for n in live:
+                p = parse_worker_nick(n)
+                if p and p[0].lower() != me_mid:
+                    return True
+    return False
 
 
 def mrb_blocked_for_author(
@@ -165,19 +237,8 @@ def mrb_blocked_for_author(
     nick: str,
     live_nicks: set[str] | frozenset[str],
 ) -> bool:
-    """Never offer MRB to the PR author seat (FR #224 / #226).
-
-    ``live_nicks`` kept for call-site compatibility; sole-seat self-MRB is not allowed.
-    """
-    del live_nicks  # API stable; sole-seat self-MRB is no longer allowed.
-    if str(row.get("task") or "").upper() != "MRB":
-        return False
-    author = author_seat_of(row)
-    if not author:
-        return False
-    me = (canonical_worker_nick(nick) or nick).lower()
-    return author.lower() == me
-
+    """Backward-compatible alias for ``review_blocked_for_author``."""
+    return review_blocked_for_author(row, nick, live_nicks)
 
 def _parse_cooldown_until(until_s: str) -> float | None:
     s = str(until_s or "").strip()
@@ -438,7 +499,7 @@ class ChairAssignState:
             # bobiverse#168: chair/outbox jobs only to the capable machine (ionos).
             if row_blocked_for_machine(row, nick):
                 continue
-            if mrb_blocked_for_author(row, nick, live):
+            if review_blocked_for_author(row, nick, live):
                 continue
             if nick_on_giveup_cooldown(row, nick, now):
                 continue
