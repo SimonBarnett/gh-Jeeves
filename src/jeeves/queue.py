@@ -103,7 +103,9 @@ class Claim:
     pr_id: str = ""  # pull request #n when claim is about a PR (MRB/UAT/RESTORE)
     merged: bool | None = None
     require_machine: str = ""  # bobiverse#168: e.g. ionos for chair/outbox jobs
-    author_seat: str = ""  # FR #224: worker nick that opened the PR (DONE FR path)
+    author_seat: str = ""  # FR #224 / gh-Jeeves#230: block self-MRB/UAT
+    implementer_seat: str = ""
+    mrb_author_seat: str = ""
     labels: tuple[str, ...] = ()
     state: str = ""  # FR #709: open|closed stamped from GitHub
 
@@ -575,6 +577,10 @@ def _append_unaccepted(doc: dict, claim: Claim, **extra: Any) -> None:
         row["require_machine"] = str(claim.require_machine).strip().lower()
     if claim.author_seat:
         row["author_seat"] = str(claim.author_seat).strip()
+    if claim.implementer_seat:
+        row["implementer_seat"] = str(claim.implementer_seat).strip()
+    if claim.mrb_author_seat:
+        row["mrb_author_seat"] = str(claim.mrb_author_seat).strip()
     if claim.labels:
         row["labels"] = list(claim.labels)
     if claim.state:
@@ -586,6 +592,48 @@ def _append_unaccepted(doc: dict, claim: Claim, **extra: Any) -> None:
         lambda r: _same(r, claim.repo, claim.task, claim.id),
     )
     doc["unaccepted"].append(row)
+
+
+def _mrb_author_fields_from_doc(doc: dict, repo: str, pr: str) -> dict[str, str]:
+    """gh-Jeeves#230: collect implementer/MRB seats from accepted/done/unaccepted MRB row."""
+    pr_n = _norm_ident(pr)
+    for bucket in ("accepted", "done", "unaccepted"):
+        for row in doc.get(bucket) or []:
+            if str(row.get("repo") or "") != repo:
+                continue
+            if str(row.get("task") or "").upper() != "MRB":
+                continue
+            rid = _norm_ident(str(row.get("id") or ""))
+            rpr = _norm_ident(str(row.get("pr_id") or ""))
+            if rid != pr_n and rpr != pr_n:
+                continue
+            out: dict[str, str] = {}
+            implementer = str(
+                row.get("implementer_seat") or row.get("author_seat") or ""
+            ).strip()
+            mrb_author = str(
+                row.get("mrb_author_seat")
+                or row.get("nick")
+                or row.get("done_by")
+                or ""
+            ).strip()
+            # When only author_seat is set (DONE FR stamp), that is the implementer.
+            if implementer and not mrb_author:
+                out["author_seat"] = implementer
+                out["implementer_seat"] = implementer
+            elif mrb_author and not implementer:
+                out["author_seat"] = mrb_author
+                out["mrb_author_seat"] = mrb_author
+            else:
+                if mrb_author:
+                    out["author_seat"] = mrb_author
+                    out["mrb_author_seat"] = mrb_author
+                if implementer:
+                    out["implementer_seat"] = implementer
+                    if not out.get("author_seat"):
+                        out["author_seat"] = implementer
+            return out
+    return {}
 
 
 def _linked_ids(claim: Claim) -> tuple[str, ...]:
@@ -783,6 +831,8 @@ def _apply_queue_event_locked(home: Path, claim: Claim) -> str:
                 )
             save_queue(home, doc)
             return "restored:FR:mrb_fail"
+        # gh-Jeeves#230: stamp UAT author seats from MRB row before dropping it.
+        author_fields = _mrb_author_fields_from_doc(doc, repo, pr)
         _remove_tasks_for_ids(doc, repo, (pr,), {"MRB"})
         # drop accepted MRB for this PR so workers don't stay on merged work
         _remove_matching(
@@ -810,6 +860,9 @@ def _apply_queue_event_locked(home: Path, claim: Claim) -> str:
                     refs=(_norm_ident(fr),),
                     pr_id=pr,
                     merged=True,
+                    author_seat=author_fields.get("author_seat", ""),
+                    implementer_seat=author_fields.get("implementer_seat", ""),
+                    mrb_author_seat=author_fields.get("mrb_author_seat", ""),
                 ),
             )
         save_queue(home, doc)
@@ -1266,9 +1319,21 @@ def _complete_job_locked(
                     url=url,
                     refs=(fr_id,),
                     pr_id=pr_id,
-                    author_seat=nick_s,  # FR #224: block this seat from self-MRB
+                    author_seat=nick_s,  # FR #224 / #230: block this seat from self-MRB/UAT
+                    implementer_seat=nick_s,
                 ),
             )
+    # gh-Jeeves#230: DONE MRB PASS stamps mrb_author_seat onto the accepted row
+    # so a later merge→UAT webhook can copy it (UAT enqueue is K4 merge path).
+    if queued_task_u == "MRB" and not is_mrb_fail_result(result):
+        # match already moved to done; refresh last done entry seats.
+        if doc.get("done"):
+            last = doc["done"][-1]
+            if str(last.get("task") or "").upper() == "MRB" and str(last.get("nick") or "") == nick_s:
+                last["mrb_author_seat"] = nick_s
+                if not str(last.get("author_seat") or "").strip():
+                    last["author_seat"] = nick_s
+                save_queue(home, doc)
     return "done", match
 
 
