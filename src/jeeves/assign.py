@@ -33,7 +33,9 @@ from .queue import (
     fr_already_done,
     is_mrb_fix_pr_title,
     load_queue,
+    mrb_already_done,
     ordered_unaccepted,
+    purge_dead_mrb_unaccepted,
     row_skip_fr_reason,
     save_queue,
     tasks_equivalent,
@@ -629,6 +631,8 @@ class ChairAssignState:
         }
         pick: dict[str, Any] | None = None
         purge_keys: list[str] = []
+        purge_dead_mrb_unaccepted(home)
+        q = load_queue(home)
         for row in ordered_unaccepted(home):
             if not isinstance(row, dict):
                 continue
@@ -636,6 +640,10 @@ class ChairAssignState:
             if key in accepted_keys:
                 continue
             if key in offered:
+                continue
+            # bobiverse#740 / #738: never re-offer MERGED/CLOSED / already-DONE MRB.
+            if str(row.get("task") or "").upper() == "MRB" and mrb_already_done(q, row):
+                purge_keys.append(key)
                 continue
             # FR #709: never offer closed / skip-label / harvest / already-DONE FRs.
             skip = row_skip_fr_reason(row)

@@ -419,6 +419,41 @@ def row_skip_fr_reason(row: dict[str, Any]) -> str | None:
     )
 
 
+def mrb_already_done(doc: dict, row: dict) -> bool:
+    """bobiverse#740: True when done already has MRB for same repo+#id."""
+    if str(row.get("task") or "").upper() != "MRB":
+        return False
+    repo = _norm_repo(str(row.get("repo") or ""))
+    ident = _norm_ident(str(row.get("id") or ""))
+    if not repo or not ident:
+        return False
+    for r in doc.get("done") or []:
+        if not isinstance(r, dict):
+            continue
+        if str(r.get("task") or "").upper() != "MRB":
+            continue
+        if _norm_repo(str(r.get("repo") or "")) != repo:
+            continue
+        if _norm_ident(str(r.get("id") or "")) == ident:
+            return True
+    return False
+
+
+def purge_dead_mrb_unaccepted(home: Path) -> int:
+    """Drop unaccepted MRB rows already in done (bobiverse#740 / #738)."""
+    doc = load_queue(home)
+    before = len(doc.get("unaccepted") or [])
+    kept = []
+    for row in doc.get("unaccepted") or []:
+        if isinstance(row, dict) and str(row.get("task") or "").upper() == "MRB" and mrb_already_done(doc, row):
+            continue
+        kept.append(row)
+    if len(kept) != before:
+        doc["unaccepted"] = kept
+        save_queue(home, doc)
+    return before - len(kept)
+
+
 def fr_already_done(doc: dict[str, Any], repo: str, ident: str) -> bool:
     """True when done[] already has a FR/PR row for this issue id."""
     repo_s = _norm_repo(repo)
@@ -1312,6 +1347,9 @@ def _complete_job_locked(
     doc["done"].append(match)
     if len(doc["done"]) > DONE_CAP:
         doc["done"] = doc["done"][-DONE_CAP:]
+    # bobiverse#740 / #738: DONE MRB purges lingering unaccepted duplicates.
+    if str(match.get("task") or "").upper() == "MRB" or str(task_u).upper() == "MRB":
+        _remove_tasks_for_ids(doc, repo, (ident,), {"MRB"})
     from .digest import worker_idle_entry
 
     doc["workers"][nick_s] = worker_idle_entry()
