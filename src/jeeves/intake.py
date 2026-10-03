@@ -19,9 +19,13 @@ MAX_BODY_BYTES = 256 * 1024
 MAX_FILES = 32
 MAX_FILE_BYTES = 128 * 1024
 DEFAULT_RATE_PER_MIN = 30
+# FR #222 / bobiverse #94: honour payload repo; never rewrite to bobiverse.
+# Fleet product repos must be allow-listed so harvests land on the right tracker.
 DEFAULT_ALLOW_REPOS = frozenset(
     {
         "SimonBarnett/gh-Jeeves",
+        "SimonBarnett/bobiverse",
+        "SimonBarnett/agentic_fomprep",
         "SimonBarnett/agentic_irc",
         "SimonBarnett/agentic_build",
         "SimonBarnett/skills-visionary",

@@ -53,7 +53,7 @@ flowchart TD
 | Field | Required | Notes |
 |-------|----------|-------|
 | `kind` | yes | `issue` (bug) or `fr` (feature request) |
-| `repo` | yes | `owner/name` on the intake allow-list |
+| `repo` | yes | `owner/name` on the intake allow-list. **Required** — Jeeves never defaults this to `SimonBarnett/bobiverse` (FR #222). File against the product repo the report is about (e.g. `SimonBarnett/agentic_fomprep`). |
 | `title` | yes | Short; `FR:` prefix for features |
 | `body` | yes | Markdown; no secrets, tokens, or machine IDs |
 | `source` | recommended | `machine`, `agent`, `skill_book`, `version` |
@@ -129,7 +129,8 @@ Python helpers (this repo, script-only): `build_report_payload`,
 - Hardcode a live host in this skill — always `{bob-host}`.
 - Put secrets, tokens, keys, contact values, or machine IDs in logs or the
   public issue body.
-- Invent allow-list repos; a repo not on the list returns 4xx and files nothing.
+- Invent allow-list repos; a repo not on the list returns **403** `repo_not_allowed` and files nothing (never rewrite to bobiverse).
+- Omit `repo` or point every harvest at bobiverse when the work was in another allow-listed product (FR #222 / bobiverse #94). Default allow-list includes `gh-Jeeves`, `bobiverse`, `agentic_fomprep`, `agentic_irc`, `agentic_build`, `skills-visionary`, `AgentMonitor`.
 - Stamp ready for human UAT from a report alone.
 - Use LLM calls on the filing path — curl / Invoke-RestMethod / `jeeves.intake`
   only.
