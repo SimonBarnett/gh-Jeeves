@@ -60,8 +60,12 @@ def test_mrb_still_blocked_for_author_when_other_live():
     assert review_blocked_for_author(
         row, "marchhare-31712", {"marchhare-31712", "flamingo-1"}
     )
-    assert not review_blocked_for_author(
+    # FR #224 / #226 (merged #233): self-MRB always blocked, even as sole live seat.
+    assert review_blocked_for_author(
         row, "marchhare-31712", {"marchhare-31712"}
+    )
+    assert not review_blocked_for_author(
+        row, "flamingo-1", {"marchhare-31712", "flamingo-1"}
     )
 
 
