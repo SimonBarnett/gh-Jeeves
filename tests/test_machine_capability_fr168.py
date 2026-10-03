@@ -171,3 +171,40 @@ def test_claim_from_issue_stamps_require_machine():
     assert claim is not None
     assert claim.task == "FR"
     assert claim.require_machine == "ionos"
+
+def test_explicit_require_machine_overrides_chair_text():
+    """Hostile: explicit non-ionos pin must win over chair-outbox heuristics."""
+    assert (
+        infer_require_machine(
+            title="Confirm ircJeeves drains chair-outbox",
+            body="",
+            labels=["needs-ionos"],
+            explicit="marchhare",
+        )
+        == "marchhare"
+    )
+
+
+def test_capability_chair_label_pins_ionos():
+    assert (
+        infer_require_machine(title="unrelated", body="", labels=["capability:chair"])
+        == CHAIR_HOST_MACHINE
+    )
+
+
+def test_bare_chair_word_does_not_pin():
+    """Hostile: 'chair' alone in TipForm/docs text must not force ionos."""
+    assert (
+        infer_require_machine(
+            title="docs: clarify chair vs digest home split",
+            body="no outbox work",
+            labels=["via-intake"],
+        )
+        is None
+    )
+
+
+def test_unparseable_nick_blocked_when_required():
+    assert row_blocked_for_machine(
+        {"require_machine": "ionos", "line": "x"}, "Jeeves"
+    )

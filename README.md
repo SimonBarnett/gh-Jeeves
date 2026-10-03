@@ -8,17 +8,17 @@
 
 With every LLM/token pool disabled, this chain must complete with **scripts only**:
 
-1. GitHub event → Bob GIT webhook  
-2. Jeeves announces `GIT …` on `#bobiverse` and updates the queue (supersede rules)  
+1. GitHub event â†’ Bob GIT webhook  
+2. Jeeves announces `GIT â€¦` on `#bobiverse` and updates the queue (supersede rules)  
 3. Worker `!bored` in its own `#{machine}` (on join and after DONE)  
 4. **Jeeves assigns** the next job (`<nick>: <TYPE> <repo>#<n> <url>`, `!focus` order)  
-5. Worker `ACK` → Jeeves marks accepted + busy  
+5. Worker `ACK` â†’ Jeeves marks accepted + busy  
 6. Worker does the task (only step where AI is allowed)  
-7. Worker `DONE` → Jeeves marks done + idle + supersede; worker `!bored` again  
+7. Worker `DONE` â†’ Jeeves marks done + idle + supersede; worker `!bored` again  
 
 **Resync:** on service start (FR #49) loads \queue.json\ then GitHub resync so \!list\ is full; every 15m thereafter. Token from env/file, never logged.
 
-**G1** (CI, every PR): local test ircd E2E with no-LLM guard (plain + **TLS path**, FR #46). **G2** (after deploy): live smoke including native TLS to Ergo. A release is not shippable without both. Full definition: `docs/brief/JEEVES_BRIEF.md` §0.
+**G1** (CI, every PR): local test ircd E2E with no-LLM guard (plain + **TLS path**, FR #46). **G2** (after deploy): live smoke including native TLS to Ergo. A release is not shippable without both. Full definition: `docs/brief/JEEVES_BRIEF.md` Â§0.
 
 **IRC client:** gh-Jeeves owns a **native TLS IRC client** (`jeeves.tls_irc`) for the chair. It does **not** import or spawn `agentic_irc` `irc_agent --chair`. Production: `python -m jeeves chair --tls --host irc.ntsa.uk --port 6697`.
 
@@ -38,24 +38,24 @@ flowchart LR
 
 ## CAST IRON rules
 
-**Install (FR #48):** `config/bobjeeves.example.json` drives `Install-BobJeeves.ps1` — full `--host/--port/--tls` cmdline, receiver **19781**, **no BobIrcd dependency**, topology **combined** chair+receiver.
+**Install (FR #48):** `config/bobjeeves.example.json` drives `Install-BobJeeves.ps1` â€” full `--host/--port/--tls` cmdline, receiver **19781**, **no BobIrcd dependency**, topology **combined** chair+receiver.
 
-**Modes (FR #52 / #160):** authenticated `bob-*` get `+h` (`+o` in own shop); authenticated `simon` from a fleet host gets `+o`. Trust is services account (SASL), never nick alone. No channel text. Ergo has no runtime SAIDENTIFY/auto-OPER for Simon — Halloy needs SASL/PASS/CERTFP; see `docs/simon-auto-oper-runtime-fr160.md`.
+**Modes (FR #52 / #160):** authenticated `bob-*` get `+h` (`+o` in own shop); authenticated `simon` from a fleet host gets `+o`. Trust is services account (SASL), never nick alone. No channel text. Ergo has no runtime SAIDENTIFY/auto-OPER for Simon â€” Halloy needs SASL/PASS/CERTFP; see `docs/simon-auto-oper-runtime-fr160.md`.
 
 **Channel join (FR #55):** on connect and reconnect Jeeves sends LIST and JOINs every channel returned (skips 0/+ local and config denylist). Periodic re-LIST (default 60s) joins newly created shops. KICK rejoins with backoff; ban/invite-only logs once and stops. Static shops is optional seed only.
 
 1. Announce only on `#bobiverse`; queue on digest webhook.  
-2. In every `#{machine}`: `!bored` → assign; ACK → accepted+busy; DONE → done+idle+supersede (FR #106).  
-3. **Jeeves owns `!bored` → assign** (ear OFFER path retired). One line: `<nick>: <TYPE> <repo>#<n> <url>`.  
+2. In every `#{machine}`: `!bored` â†’ assign; ACK â†’ accepted+busy; DONE â†’ done+idle+supersede (FR #106).  
+3. **Jeeves owns `!bored` â†’ assign** (ear OFFER path retired). One line: `<nick>: <TYPE> <repo>#<n> <url>`.  
 4. Workers stay in their own shop; only `{machine}-<pid>` `!bored` is trusted.  
 5. Deterministic scripts-only path (works during token outage / Sand empty).  
-6. Supersede: FR↔MRB↔UAT per GitHub events (see diagrams).  
-7. MRB PASS closes FR; FAIL one fix PR, FR stays open; **UAT** = separate worker vision-fidelity of `main` (FR #187) via `DONE UAT … PASS|FAIL` (not Bob-only). Self-MRB only when one live seat.
-   **FR #151:** agent-submitted issues need **MRB #1** (Simon vision fit: `needs-mrb1` → `mrb1-pass`) before engineering.
+6. Supersede: FRâ†”MRBâ†”UAT per GitHub events (see diagrams).  
+7. MRB PASS closes FR; FAIL one fix PR, FR stays open; **UAT** = separate worker vision-fidelity of `main` (FR #187) via `DONE UAT â€¦ PASS|FAIL` (not Bob-only). Self-MRB only when one live seat.
+   **FR #151:** agent-submitted issues need **MRB #1** (Simon vision fit: `needs-mrb1` â†’ `mrb1-pass`) before engineering.
    **FR #92 / MRB #2:** PR body needs `Seat: {nick}`. Reviewing seat posts required check **`mrb/verdict`** via
-   `tools/post_mrb_verdict.py` (full `pytest tests/`, duration ≥ 10 min, reviewer ≠ author).
+   `tools/post_mrb_verdict.py` (full `pytest tests/`, duration â‰¥ 10 min, reviewer â‰  author).
    See `docs/mrb-gates.md` and `docs/mrb-enforcement.md`. Simon may admin-override.  
-8. `!list` in channel or PM → queue by PM only (`all`/`repo` filters; no silent cap).  
+8. `!list` in channel or PM â†’ queue by PM only (`all`/`repo` filters; no silent cap).  
 9. Own Windows service; never touch Ergo/BobIrcd.  
 10. Busy/idle from ACK/DONE, not from TUI appearance.  
 11. `!ignore` / `!unignore` / `!ignored` (FR #75): suppress a repo from the whole Jeeves process (no announce, queue, `!list`, or assign). List persists in `ignored.json` beside `queue.json`. Simon (account) or `bob-*` ops mutate; `!ignored` is open.  
@@ -79,7 +79,7 @@ Migration: `docs/migration-plan.md`. Vision input: `docs/brief/JEEVES_BRIEF.md`.
 
 ## Diagrams
 
-One diagram per concern (~5–9 nodes). Index first; then lifecycle; then deployment/recovery.
+One diagram per concern (~5â€“9 nodes). Index first; then lifecycle; then deployment/recovery.
 
 ### Index
 
@@ -96,7 +96,7 @@ flowchart LR
 
 *Caption: the map of the diagrams below. Top row is the job lifecycle; bottom row is where things run and how they recover.*
 
-### GitHub event → Jeeves announce
+### GitHub event â†’ Jeeves announce
 
 ```mermaid
 flowchart LR
@@ -109,7 +109,7 @@ flowchart LR
   J --> BV["#bobiverse GIT line"]
 ```
 
-*Caption: one GitHub event becomes one `GIT …` line on #bobiverse and one queue change, with no LLM involved.*
+*Caption: one GitHub event becomes one `GIT â€¦` line on #bobiverse and one queue change, with no LLM involved.*
 
 ### Queue supersede rules
 
@@ -125,7 +125,7 @@ stateDiagram-v2
 
 *Caption: the queue holds only the current task per piece of work, and each GitHub event replaces it deterministically. UAT is worker-stamped (FR #187).*
 
-### Shop claim: !bored → Jeeves assign → ACK (FR #106)
+### Shop claim: !bored â†’ Jeeves assign â†’ ACK (FR #106)
 
 ```mermaid
 sequenceDiagram
@@ -141,7 +141,7 @@ sequenceDiagram
 
 *Caption: Jeeves assigns on !bored; the worker ACKs in #machine (ear OFFER retired).*
 
-### ACK/DONE → webhook busy/idle
+### ACK/DONE â†’ webhook busy/idle
 
 ```mermaid
 flowchart LR
@@ -247,3 +247,7 @@ flowchart TD
 ## License / ownership
 
 Public product under SimonBarnett. Plan seat created this repo with Bob GIT webhook `https://irc.ntsa.uk/bob/v1/git`.
+
+## Machine capability (bobiverse#168)
+
+Shop assign skips rows whose `require_machine` does not match the worker's machine. Chair/outbox/ircJeeves jobs infer `ionos` from labels (`needs-ionos`, `capability:chair`) or title/body cues (`chair-outbox`, `ircJeeves`, …). Explicit `require_machine` on the queue row wins.
