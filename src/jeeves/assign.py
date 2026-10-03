@@ -339,18 +339,22 @@ def _norm_pr_id(value: Any) -> str:
 
 
 def mrb_row_not_offerable(row: dict[str, Any], doc: dict[str, Any] | None = None) -> bool:
-    """True when an MRB row must not be assigned (bobiverse#224).
+    """True when an MRB/UAT row must not be assigned (bobiverse#224 / #765).
 
-    Covers: ``merged`` flag, mrb-*-fix / fix(mrb-N) titles, and a UAT row for
-    the same PR id (merge already superseding).
+    Covers: ``merged`` flag, mrb-*-fix / fix(mrb-N) titles (MRB and UAT),
+    and a UAT row for the same PR id (merge already superseding).
     """
-    if str(row.get("task") or "").upper() != "MRB":
+    task = str(row.get("task") or "").upper()
+    line = str(row.get("line") or "")
+    # bobiverse#765: never offer UAT of an mrb-*-fix / fix(mrb-N) PR.
+    if task == "UAT" and is_mrb_fix_pr_title(line):
+        return True
+    if task != "MRB":
         return False
     if row.get("merged") is True:
         return True
     if str(row.get("action") or "").lower() == "merged":
         return True
-    line = str(row.get("line") or "")
     if is_mrb_fix_pr_title(line):
         return True
     if doc is None:
@@ -375,9 +379,10 @@ def mrb_row_not_offerable(row: dict[str, Any], doc: dict[str, Any] | None = None
 
 
 def purge_stale_mrb_rows(home: Path) -> int:
-    """Drop unaccepted MRB rows that are mrb-fix titles or already merged.
+    """Drop unaccepted MRB/UAT rows that are mrb-fix titles or already-merged MRBs.
 
     Returns the number of rows removed. Persists when anything changed.
+    (bobiverse#224 MRB; bobiverse#765 UAT of mrb-*-fix).
     """
     doc = load_queue(home)
     before = list(doc.get("unaccepted") or [])

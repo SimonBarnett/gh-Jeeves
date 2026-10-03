@@ -576,6 +576,16 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
                 author_seat=author,
             )
         if action == "closed" and merged:
+            # bobiverse#765: mrb-*-fix / fix(mrb-N) merges must not enqueue UAT
+            # (self-UAT trap; FAIL-fix is not a product UAT target).
+            if is_mrb_fix_pr_title(title):
+                log.info(
+                    "event=skip_uat_mrb_fix_pr repo=%s id=%s title=%s",
+                    full,
+                    ident,
+                    title[:80],
+                )
+                return None
             # K4: MRB PASS → drop MRB (pr_id), UAT for each linked FR (or PR id if none).
             uat_id = refs[0] if refs else ident
             return Claim(
@@ -863,6 +873,15 @@ def _apply_queue_event_locked(home: Path, claim: Claim) -> str:
         return "enqueued:MRB"
 
     if task == "UAT":
+        # bobiverse#765: never enqueue UAT from an mrb-*-fix / fix(mrb-N) merge.
+        if is_mrb_fix_pr_title(str(claim.line or "")):
+            log.info(
+                "event=skip_uat_mrb_fix_apply repo=%s id=%s line=%s",
+                repo,
+                ident,
+                str(claim.line or "")[:80],
+            )
+            return "skipped:uat_mrb_fix"
         # K4: merged PR — remove the MRB row for this PR (not just FR id), then UAT linked FRs.
         pr = pr_id or ident
         # K15: MRB FAIL then merge with Closes → restore FR, never UAT.
