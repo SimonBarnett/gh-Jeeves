@@ -1,4 +1,4 @@
-﻿"""bobiverse#247: never invent /pull/N from an issue id for MRB offers."""
+"""bobiverse#247: never invent /pull/N from an issue id for MRB offers."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -83,6 +83,17 @@ def test_mrb_real_pull_offerable():
         "url": "https://github.com/SimonBarnett/bobiverse/pull/240",
     }
     assert mrb_row_offerable(row) is True
+
+
+def test_mrb_cross_repo_pull_url_not_offerable():
+    """Queue row repo must match the pull URL repo (MRB #229 hostile)."""
+    row = {
+        "task": "MRB",
+        "repo": "SimonBarnett/bobiverse",
+        "id": "#240",
+        "url": "https://github.com/SimonBarnett/gh-Jeeves/pull/240",
+    }
+    assert mrb_row_offerable(row) is False
 
 
 def test_fr_still_invents_issues_url():
