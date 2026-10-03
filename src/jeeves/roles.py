@@ -16,6 +16,7 @@ from .mode_grants import ModeGrantController
 from .nicks import bored_gate, canonical_worker_nick, worker_shop_channel
 from .assign import (
     ChairAssignState,
+    github_pr_exists_checker,
     live_seats_from_modes,
     trust_bored,
 )
@@ -1011,6 +1012,8 @@ class JeevesChair:
             target,
             live_nicks=live,
             chair_nick=self.nick,
+            # bobiverse#247: skip MRB rows whose /pull/N 404s when token available
+            pr_exists=github_pr_exists_checker(home=self.home),
         )
         if decision.action == "assign" and decision.line:
             self._shop_privmsg(target, decision.line)

@@ -65,6 +65,15 @@ _ASSIGN_RE = re.compile(
 )
 _NOTHING_RE = re.compile(r"^(\S+):\s+nothing queued\s*$", re.I)
 _CRLF = re.compile(r"[\r\n]+")
+# bobiverse#247: MRB offers must use a real pull URL — never invent /pull/{issue_id}.
+_PR_URL_RE = re.compile(
+    r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\d+)",
+    re.I,
+)
+_ISSUE_URL_RE = re.compile(
+    r"https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)",
+    re.I,
+)
 
 
 def offers_path(home: Path) -> Path:
@@ -77,6 +86,83 @@ def sanitize_assign_text(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _norm_task(row: dict[str, Any]) -> str:
+    task = str(row.get("task") or "FR").upper()
+    if task == "PR":
+        task = "FR"
+    if task not in ("FR", "MRB", "UAT"):
+        task = "FR"
+    return task
+
+
+def _row_num(row: dict[str, Any]) -> str:
+    ident = str(row.get("id") or "").strip()
+    if ident and not ident.startswith("#"):
+        ident = f"#{ident}"
+    return ident.lstrip("#")
+
+
+def resolve_assign_url(row: dict[str, Any]) -> str:
+    """URL for an assign line.
+
+    FR/UAT may invent ``/issues/{id}`` when url is missing.
+    MRB may only use an existing ``/pull/N`` url, or invent from explicit
+    ``pr_id`` / ``pr`` — never from the bare row id alone (bobiverse#247).
+    """
+    task = _norm_task(row)
+    repo = str(row.get("repo") or "").strip()
+    url = str(row.get("url") or "").strip()
+    if task == "MRB":
+        if _PR_URL_RE.search(url):
+            return url
+        # Explicit PR id only — do not fall back to issue id.
+        pr = str(row.get("pr_id") or row.get("pr") or "").strip().lstrip("#")
+        if repo and pr:
+            return f"https://github.com/{repo}/pull/{pr}"
+        # Missing / issues-shaped url → empty (caller skips offer).
+        return ""
+    if url:
+        return url
+    num = _row_num(row)
+    if repo and num:
+        return f"https://github.com/{repo}/issues/{num}"
+    return ""
+
+
+def mrb_row_offerable(
+    row: dict[str, Any],
+    *,
+    pr_exists: Callable[[str, str], bool] | None = None,
+) -> bool:
+    """True when an MRB row has a resolvable pull URL (and optional live PR check)."""
+    if _norm_task(row) != "MRB":
+        return True
+    url = resolve_assign_url(row)
+    if not url or not _PR_URL_RE.search(url):
+        return False
+    if _ISSUE_URL_RE.search(str(row.get("url") or "")) and not _PR_URL_RE.search(
+        str(row.get("url") or "")
+    ):
+        return False
+    if pr_exists is None:
+        return True
+    m = _PR_URL_RE.search(url)
+    if not m:
+        return False
+    repo, num = m.group(1), m.group(2)
+    try:
+        return bool(pr_exists(repo, num))
+    except Exception as e:  # noqa: BLE001 — offer path must not crash
+        log.warning(
+            "event=mrb_pr_exists_err repo=%s num=%s err=%s",
+            repo,
+            num,
+            type(e).__name__,
+        )
+        # Fail closed for MRB: do not offer a possibly-fake pull URL.
+        return False
+
+
 def format_assign_line(
     nick: str,
     row: dict[str, Any],
@@ -86,20 +172,13 @@ def format_assign_line(
     max_wire: int = 512,
 ) -> str:
     """Build ``<nick>: <TASK> <repo>#<n> <url>`` (no OFFER / ASSIGN keywords)."""
-    task = str(row.get("task") or "FR").upper()
-    if task == "PR":
-        task = "FR"
-    if task not in ("FR", "MRB", "UAT"):
-        task = "FR"
+    task = _norm_task(row)
     repo = str(row.get("repo") or "").strip()
     ident = str(row.get("id") or "").strip()
     if ident and not ident.startswith("#"):
         ident = f"#{ident}"
     num = ident.lstrip("#")
-    url = str(row.get("url") or "").strip()
-    if not url and repo and num:
-        kind = "pull" if task == "MRB" else "issues"
-        url = f"https://github.com/{repo}/{kind}/{num}"
+    url = resolve_assign_url(row)
     prefix = f"{nick}: {task} {repo}#{num} "
     overhead = wire_line_bytes("", nick=chair_nick, channel=channel)
     room = max_wire - overhead - utf8_len(prefix)
@@ -405,6 +484,7 @@ class ChairAssignState:
         live_nicks: set[str] | frozenset[str] | None = None,
         chair_nick: str = "Jeeves",
         now: float | None = None,
+        pr_exists: Callable[[str, str], bool] | None = None,
     ) -> AssignDecision:
         self._home = Path(home)
         self.expire_timed_out(now=now)
@@ -505,6 +585,15 @@ class ChairAssignState:
                 continue
             if row.get("needs_human") in (True, "true", "1", 1):
                 continue
+            # bobiverse#247: skip MRB rows without a real pull URL (or PR 404).
+            if not mrb_row_offerable(row, pr_exists=pr_exists):
+                log.info(
+                    "event=offer_skip_mrb_no_pr nick=%s job=%s url=%s",
+                    canon,
+                    key,
+                    str(row.get("url") or "")[:120],
+                )
+                continue
             # FR #133: skip jobs this seat was offered N times with no ACK.
             ak = self._attempt_key(canon, row)
             if int(self.attempts.get(ak) or 0) >= int(self.max_offer_attempts):
@@ -538,6 +627,10 @@ class ChairAssignState:
         # Canonicalise legacy PR → FR for ACK match (#102)
         if str(pick.get("task") or "").upper() == "PR":
             pick["task"] = "FR"
+        # Stamp resolved pull URL onto MRB rows so the wire line never invents one.
+        resolved = resolve_assign_url(pick)
+        if resolved:
+            pick["url"] = resolved
         line = format_assign_line(
             nick, pick, chair_nick=chair_nick, channel=channel
         )
@@ -551,6 +644,70 @@ class ChairAssignState:
         self.history.append(line)
         self.save()
         return AssignDecision("assign", line=line, reason="ok", row=pick)
+
+
+def github_pr_exists_checker(
+    *,
+    home: Path | None = None,
+    cache: dict[str, bool] | None = None,
+) -> Callable[[str, str], bool] | None:
+    """Return a ``pr_exists(repo, num)`` callback when a GitHub token is available.
+
+    Used by the chair !bored path (bobiverse#247) so synthetic ``/pull/N`` rows
+    that 404 are skipped. Returns None when offline / no token (structural
+    URL checks in ``mrb_row_offerable`` still apply).
+    """
+    try:
+        from .resync import load_github_token
+    except Exception:  # noqa: BLE001
+        return None
+    homes = [home] if home is not None else None
+    token = load_github_token(homes=homes)
+    if not token:
+        return None
+    store: dict[str, bool] = cache if cache is not None else {}
+
+    def _check(repo: str, num: str) -> bool:
+        key = f"{repo}#{num}"
+        if key in store:
+            return store[key]
+        import urllib.error
+        import urllib.request
+
+        url = f"https://api.github.com/repos/{repo}/pulls/{num}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "gh-Jeeves-assign",
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:  # noqa: S310
+                ok = 200 <= int(getattr(resp, "status", 200) or 200) < 300
+        except urllib.error.HTTPError as e:
+            ok = False
+            if int(getattr(e, "code", 0) or 0) not in (404, 410):
+                log.warning(
+                    "event=mrb_pr_exists_http repo=%s num=%s code=%s",
+                    repo,
+                    num,
+                    getattr(e, "code", "?"),
+                )
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "event=mrb_pr_exists_err repo=%s num=%s err=%s",
+                repo,
+                num,
+                type(e).__name__,
+            )
+            ok = False
+        store[key] = ok
+        return ok
+
+    return _check
 
 
 def trust_bored(
