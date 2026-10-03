@@ -306,26 +306,40 @@ def build_outstanding(
                 }
             )
 
-        for pr in closed:
-            num = pr.get("number")
-            if num is None:
-                continue
-            if pr.get("merged") and _awaiting_uat(pr):
-                closes = _pr_closes(pr)
-                # UAT keyed to FR if closes #n else PR number
-                uat_id = closes[0] if closes else _num_id(num)
+        # bobiverse#768 / t853u: UAT is per REPO. Only when there are no open
+        # (non-skipped) issues and no open PRs, enqueue one ``UAT #0`` for merged
+        # PRs still awaiting UAT. Never enqueue per-PR / per-issue UAT rows.
+        from .queue import is_mrb_fix_pr_title
+
+        open_fr_or_mrb = any(r.get("repo") == repo and r.get("task") in ("FR", "MRB") for r in rows)
+        if not open_fr_or_mrb:
+            merged_awaiting: list[str] = []
+            for pr in closed:
+                num = pr.get("number")
+                if num is None:
+                    continue
+                title = str(pr.get("title") or "")
+                if is_mrb_fix_pr_title(title):
+                    continue
+                if pr.get("merged") and _awaiting_uat(pr):
+                    merged_awaiting.append(_num_id(num))
+            if merged_awaiting:
                 rows.append(
                     {
                         "repo": repo,
                         "task": "UAT",
-                        "id": uat_id,
-                        "line": str(pr.get("title") or "")[:120],
-                        "url": str(pr.get("html_url") or ""),
-                        "created_at": pr.get("merged_at") or pr.get("closed_at") or pr.get("created_at") or "",
-                        "seq": int(_created_ts(pr) * 1000) + int(num) + 10_000,
+                        "id": "#0",
+                        "repo_uat": True,
+                        "merged_prs": list(merged_awaiting),
+                        "line": (
+                            f"UAT {repo}: all issues closed, all PRs merged "
+                            f"({len(merged_awaiting)} merged this cycle)"
+                        )[:120],
+                        "url": f"https://github.com/{repo}",
+                        "created_at": "",
+                        "seq": 10_000_000,
                         "event": "resync",
-                        "action": "merged_awaiting_uat",
-                        "pr": _num_id(num),
+                        "action": "repo_uat",
                     }
                 )
             # closed unmerged: FR restored only if issue still open — already covered

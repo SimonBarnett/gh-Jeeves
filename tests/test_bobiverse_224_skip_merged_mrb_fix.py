@@ -183,10 +183,11 @@ def test_mrb_superseded_when_uat_for_same_pr_exists(tmp_path: Path):
                 {
                     "repo": REPO,
                     "task": "UAT",
-                    "id": "#105",
-                    "pr_id": "#106",
+                    "id": "#0",
+                    "repo_uat": True,
+                    "merged_prs": ["#106"],
                     "merged": True,
-                    "line": "merged fix",
+                    "line": f"UAT {REPO}: all clear",
                     "seq": 2,
                 },
             ],
@@ -199,4 +200,7 @@ def test_mrb_superseded_when_uat_for_same_pr_exists(tmp_path: Path):
     assert n >= 1
     q = load_queue(home)
     assert not any(str(r.get("task") or "").upper() == "MRB" for r in q["unaccepted"])
-    assert any(str(r.get("task") or "").upper() == "UAT" for r in q["unaccepted"])
+    assert any(
+        str(r.get("task") or "").upper() == "UAT" and r.get("repo_uat")
+        for r in q["unaccepted"]
+    )

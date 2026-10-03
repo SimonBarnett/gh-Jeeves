@@ -339,18 +339,28 @@ def _norm_pr_id(value: Any) -> str:
 
 
 def mrb_row_not_offerable(row: dict[str, Any], doc: dict[str, Any] | None = None) -> bool:
-    """True when an MRB row must not be assigned (bobiverse#224).
+    """True when an MRB/UAT row must not be assigned (bobiverse#224 / #768).
 
-    Covers: ``merged`` flag, mrb-*-fix / fix(mrb-N) titles, and a UAT row for
-    the same PR id (merge already superseding).
+    Covers: ``merged`` flag, mrb-*-fix / fix(mrb-N) titles, legacy per-PR UAT
+    (not ``repo_uat`` / ``#0``), and a UAT row for the same PR id superseding MRB.
     """
-    if str(row.get("task") or "").upper() != "MRB":
+    task = str(row.get("task") or "").upper()
+    line = str(row.get("line") or "")
+    # bobiverse#768 / t853u: only repo-level UAT is offerable.
+    if task == "UAT":
+        if is_mrb_fix_pr_title(line):
+            return True
+        if row.get("repo_uat"):
+            return False
+        if str(row.get("id") or "").lstrip("#") == "0":
+            return False
+        return True  # legacy per-PR / per-issue UAT
+    if task != "MRB":
         return False
     if row.get("merged") is True:
         return True
     if str(row.get("action") or "").lower() == "merged":
         return True
-    line = str(row.get("line") or "")
     if is_mrb_fix_pr_title(line):
         return True
     if doc is None:
@@ -371,11 +381,16 @@ def mrb_row_not_offerable(row: dict[str, Any], doc: dict[str, Any] | None = None
             if uat_pr == pr:
                 # Any UAT for this PR id means MRB for that PR is stale.
                 return True
+            merged = r.get("merged_prs") or []
+            if isinstance(merged, (list, tuple)) and pr in {
+                _norm_pr_id(x) for x in merged
+            }:
+                return True
     return False
 
 
 def purge_stale_mrb_rows(home: Path) -> int:
-    """Drop unaccepted MRB rows that are mrb-fix titles or already merged.
+    """Drop unaccepted MRB/UAT rows that are stale (mrb-fix, merged, legacy UAT).
 
     Returns the number of rows removed. Persists when anything changed.
     """

@@ -898,8 +898,8 @@ def _apply_queue_event_locked(home: Path, claim: Claim) -> str:
                 )
             save_queue(home, doc)
             return "restored:FR:mrb_fail"
-        # gh-Jeeves#230: stamp UAT author seats from MRB row before dropping it.
-        author_fields = _mrb_author_fields_from_doc(doc, repo, pr)
+        # bobiverse#768 / t853u: UAT is per REPO (one ``#0`` / ``repo_uat`` row from
+        # resync when the repo is clear). A merge never queues per-PR / per-issue UAT.
         _remove_tasks_for_ids(doc, repo, (pr,), {"MRB"})
         # drop accepted MRB for this PR so workers don't stay on merged work
         _remove_matching(
@@ -914,26 +914,10 @@ def _apply_queue_event_locked(home: Path, claim: Claim) -> str:
         uat_targets = links if links else (ident,)
         for fr in uat_targets:
             _remove_tasks_for_ids(doc, repo, (fr,), {"FR", "UAT", "PR"})
-            _append_unaccepted(
-                doc,
-                Claim(
-                    repo=repo,
-                    task="UAT",
-                    id=_norm_ident(fr),
-                    event=claim.event,
-                    action="merged",
-                    line=claim.line,
-                    url=claim.url,
-                    refs=(_norm_ident(fr),),
-                    pr_id=pr,
-                    merged=True,
-                    author_seat=author_fields.get("author_seat", ""),
-                    implementer_seat=author_fields.get("implementer_seat", ""),
-                    mrb_author_seat=author_fields.get("mrb_author_seat", ""),
-                ),
-            )
+        # Also drop any legacy per-PR UAT keyed to this PR id.
+        _remove_tasks_for_ids(doc, repo, (pr,), {"UAT"})
         save_queue(home, doc)
-        return "enqueued:UAT"
+        return "merged:no_per_pr_uat"
 
     if task == "RESTORE_FR":
         # PR closed unmerged: drop MRB for this PR; restore linked FRs.

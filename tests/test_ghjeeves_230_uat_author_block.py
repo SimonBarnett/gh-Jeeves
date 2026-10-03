@@ -80,12 +80,14 @@ def test_decide_skips_uat_for_author_offers_other(tmp_path: Path):
                 {
                     "repo": REPO,
                     "task": "UAT",
-                    "id": "#240",
+                    "id": "#0",
+                    "repo_uat": True,
                     "seq": 1,
                     "ts": "t",
-                    "line": "x",
+                    "line": f"UAT {REPO}: all clear",
                     "author_seat": "marchhare-35600",
-                    "url": f"https://github.com/{REPO}/pull/240",
+                    "implementer_seat": "marchhare-35600",
+                    "url": f"https://github.com/{REPO}",
                 }
             ],
             "accepted": [],
@@ -100,10 +102,11 @@ def test_decide_skips_uat_for_author_offers_other(tmp_path: Path):
     assert d1.action == "nothing"
     d2 = st.decide(home, "flamingo-1", "#flamingo", live_nicks=live)
     assert d2.action == "assign"
-    assert "UAT" in (d2.line or "") and "#240" in (d2.line or "")
+    assert "UAT" in (d2.line or "") and f"{REPO}#0" in (d2.line or "")
 
 
-def test_merged_pr_copies_author_seat_onto_uat(tmp_path: Path):
+def test_merged_pr_does_not_enqueue_per_pr_uat(tmp_path: Path):
+    """bobiverse#768: merge drops MRB; no per-issue/per-PR UAT row."""
     home = tmp_path / "h"
     home.mkdir()
     save_queue(
@@ -141,12 +144,13 @@ def test_merged_pr_copies_author_seat_onto_uat(tmp_path: Path):
         pr_id="#240",
         merged=True,
     )
-    assert apply_queue_event(home, claim) == "enqueued:UAT"
-    uats = [r for r in load_queue(home)["unaccepted"] if r.get("task") == "UAT"]
-    assert len(uats) == 1
-    assert uats[0].get("implementer_seat") == "marchhare-1"
-    assert uats[0].get("mrb_author_seat") == "ionos-2"
-    assert uats[0].get("author_seat") == "ionos-2"
+    assert apply_queue_event(home, claim) == "merged:no_per_pr_uat"
+    q = load_queue(home)
+    assert not any(str(r.get("task") or "").upper() == "UAT" for r in q["unaccepted"])
+    assert not any(
+        str(r.get("task") or "").upper() == "MRB" and str(r.get("id")) in ("#240", "240")
+        for r in (q.get("accepted") or []) + (q.get("unaccepted") or [])
+    )
 
 
 def test_done_fr_stamps_author_seat_on_mrb(tmp_path: Path):

@@ -61,8 +61,8 @@ def home(tmp_path: Path) -> Path:
     return d
 
 
-def test_1_empty_queue_fixture_2fr_1mrb_1uat(home: Path):
-    """Empty queue + 3 open issues, 1 open PR, 1 merged awaiting UAT → 2 FR + 1 MRB + 1 UAT."""
+def test_1_empty_queue_fixture_2fr_1mrb_no_per_pr_uat(home: Path):
+    """Empty queue + open work + merged PR → 2 FR + 1 MRB; no per-PR UAT (bobiverse#768)."""
     gh = FakeGitHub(
         repos=["o/r"],
         issues={
@@ -89,10 +89,9 @@ def test_1_empty_queue_fixture_2fr_1mrb_1uat(home: Path):
     assert ("FR", "#2") in tasks
     assert ("FR", "#3") not in tasks  # superseded by MRB
     assert ("MRB", "#10") in tasks
-    assert ("UAT", "#99") in tasks
+    assert not any(t[0] == "UAT" for t in tasks)  # repo not clear → no UAT #0
     assert len([t for t in tasks if t[0] == "FR"]) == 2
     assert len([t for t in tasks if t[0] == "MRB"]) == 1
-    assert len([t for t in tasks if t[0] == "UAT"]) == 1
     # oldest first: #1 before #2
     frs = [r for r in desired if r["task"] == "FR"]
     assert frs[0]["id"] == "#1"
@@ -101,7 +100,7 @@ def test_1_empty_queue_fixture_2fr_1mrb_1uat(home: Path):
     stats = run_resync(home, gh)
     assert not stats.skipped_github_down
     q = load_queue(home)
-    assert len(q["unaccepted"]) == 4
+    assert len(q["unaccepted"]) == 3
     assert q["unaccepted"][0]["id"] == "#1"
 
 
