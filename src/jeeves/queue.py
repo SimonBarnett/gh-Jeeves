@@ -36,6 +36,10 @@ DONE_CAP = 200
 # FR #102: workers with ts older than this are expired (QUIT or unseen).
 DEFAULT_STALE_WORKER_S = 1800.0
 
+# FR #226 / FR #180: after NACK|GIVEUP, same nick+row stays cool; escalate to needs_human.
+GIVEUP_COOLDOWN_S = 600.0
+GIVEUP_NEEDS_HUMAN_COUNT = 2
+
 # agentic_irc #207-compatible closes grammar (Closes/Fixes/Resolves/Refs #n).
 _CLOSES_RE = re.compile(
     r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s+#(\d+)\b",
@@ -84,6 +88,7 @@ class Claim:
     pr_id: str = ""  # pull request #n when claim is about a PR (MRB/UAT/RESTORE)
     merged: bool | None = None
     require_machine: str = ""  # bobiverse#168: e.g. ionos for chair/outbox jobs
+    author_seat: str = ""  # FR #224: worker nick that opened the PR (DONE FR path)
 
     @property
     def key(self) -> str:
@@ -475,6 +480,8 @@ def _append_unaccepted(doc: dict, claim: Claim, **extra: Any) -> None:
         row["merged"] = claim.merged
     if claim.require_machine:
         row["require_machine"] = str(claim.require_machine).strip().lower()
+    if claim.author_seat:
+        row["author_seat"] = str(claim.author_seat).strip()
     row.update({k: v for k, v in extra.items() if v is not None})
     # de-dupe same key
     _remove_matching(
@@ -955,6 +962,44 @@ def _accept_job_locked(
     return "accepted", match
 
 
+def _stamp_giveup_cooldown(row: dict[str, Any], nick: str, now: float | None = None) -> None:
+    """FR #226: per-nick cooldown after NACK|GIVEUP; needs_human after N giveups."""
+    from datetime import datetime, timedelta, timezone
+
+    now_f = time.time() if now is None else float(now)
+    me = str(nick or "").strip().lower()
+    if not me:
+        return
+    giveups = row.get("giveup_by")
+    if not isinstance(giveups, dict):
+        giveups = {}
+    else:
+        giveups = dict(giveups)
+    entry = dict(giveups.get(me) or {}) if isinstance(giveups.get(me), dict) else {}
+    try:
+        nick_count = int(entry.get("count") or 0) + 1
+    except (TypeError, ValueError):
+        nick_count = 1
+    until = datetime.fromtimestamp(now_f, tz=timezone.utc) + timedelta(
+        seconds=float(GIVEUP_COOLDOWN_S)
+    )
+    until_s = until.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    entry["count"] = nick_count
+    entry["ts"] = _utc_now()
+    entry["cooldown_until"] = until_s
+    giveups[me] = entry
+    row["giveup_by"] = giveups
+    try:
+        total = int(row.get("giveup_count") or 0) + 1
+    except (TypeError, ValueError):
+        total = 1
+    row["giveup_count"] = total
+    row["giveup_ts"] = _utc_now()
+    row["cooldown_until"] = until_s
+    if nick_count >= int(GIVEUP_NEEDS_HUMAN_COUNT) or total >= int(GIVEUP_NEEDS_HUMAN_COUNT):
+        row["needs_human"] = True
+
+
 def nack_job(
     home: Path,
     nick: str,
@@ -962,7 +1007,7 @@ def nack_job(
     repo: str,
     ident: str,
 ) -> tuple[str, dict | None]:
-    """NACK|GIVEUP: accepted → unaccepted; worker idle."""
+    """NACK|GIVEUP: accepted → unaccepted; worker idle; FR #226 cooldown stamp."""
     doc = load_queue(home)
     ident = _norm_ident(ident)
     repo = _norm_repo(repo)
@@ -985,6 +1030,7 @@ def nack_job(
     for k in ("nick", "channel", "accepted_ts"):
         match.pop(k, None)
     match["nack_ts"] = _utc_now()
+    _stamp_giveup_cooldown(match, nick_s)
     _remove_matching(
         doc["unaccepted"],
         lambda r: _same(r, repo, str(match.get("task") or task_u), ident),
@@ -1117,6 +1163,7 @@ def _complete_job_locked(
                     url=url,
                     refs=(fr_id,),
                     pr_id=pr_id,
+                    author_seat=nick_s,  # FR #224: block this seat from self-MRB
                 ),
             )
     return "done", match

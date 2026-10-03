@@ -127,10 +127,9 @@ def test_mrb_author_rule_one_and_two_live_seats():
         "author_seat": "marchhare-31712",
         "url": "https://github.com/SimonBarnett/gh-Jeeves/pull/104",
     }
-    # two live seats → author blocked
+    # FR #224: author always blocked (even sole live seat)
     assert mrb_blocked_for_author(row, "marchhare-31712", {"marchhare-31712", "flamingo-1"})
-    # only one live seat → self-MRB allowed
-    assert not mrb_blocked_for_author(row, "marchhare-31712", {"marchhare-31712"})
+    assert mrb_blocked_for_author(row, "marchhare-31712", {"marchhare-31712"})
     # other nick not author → ok
     assert not mrb_blocked_for_author(row, "flamingo-1", {"marchhare-31712", "flamingo-1"})
 
