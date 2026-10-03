@@ -353,6 +353,27 @@ def is_evergreen_mrb_home(
     return bool(labs & _EVERGREEN_LABELS)
 
 
+# bobiverse#224: MRB FAIL fix PRs (and mrb-N-fix titles) must not start a second MRB.
+_MRB_FIX_TITLE_RX = re.compile(
+    r"(?i)(?:^|\b)(?:fix\s*\(\s*mrb[-_]?\d+|mrb[-_]?\d+[-_]fix\b)"
+)
+_AGENT_SEAT_RX = re.compile(r"(?i)\bAgent:\s*([a-z0-9][a-z0-9_-]*-\d+)\b")
+
+
+def is_mrb_fix_pr_title(title: str) -> bool:
+    """True for titles like ``fix(mrb-105):…`` or ``mrb-105-fix:…`` (bobiverse#224)."""
+    return bool(_MRB_FIX_TITLE_RX.search(str(title or "")))
+
+
+def agent_seat_from_text(*parts: str) -> str:
+    """Extract ``Agent: machine-pid`` trailer from PR/issue body or line."""
+    blob = " ".join(str(p or "") for p in parts)
+    m = _AGENT_SEAT_RX.search(blob)
+    if not m:
+        return ""
+    return str(m.group(1)).strip()
+
+
 def issue_skip_fr_reason(
     *,
     title: str = "",
@@ -496,6 +517,16 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
         if refs:
             line = f"{title} " + " ".join(f"Closes {r}" for r in refs)
         if action in ("opened", "ready_for_review", "reopened", "synchronize"):
+            # bobiverse#224: FAIL-fix PRs are merged by the reviewing seat; no 2nd MRB.
+            if is_mrb_fix_pr_title(title):
+                log.info(
+                    "event=skip_mrb_fix_pr repo=%s id=%s title=%s",
+                    full,
+                    ident,
+                    title[:80],
+                )
+                return None
+            author = agent_seat_from_text(body, title)
             return Claim(
                 repo=full,
                 task="MRB",
@@ -507,6 +538,7 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
                 refs=refs,
                 pr_id=ident,
                 merged=None,
+                author_seat=author,
             )
         if action == "closed" and merged:
             # K4: MRB PASS → drop MRB (pr_id), UAT for each linked FR (or PR id if none).
