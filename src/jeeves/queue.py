@@ -61,6 +61,21 @@ _EVERGREEN_LABELS = frozenset(
         "evergreen-mrb",
     }
 )
+# FR #709 / bobiverse SKIP_FR_LABELS: never offer these as FR jobs.
+# Note: needs-mrb1 is NOT here — intake stamps it on every FR (FR #151).
+SKIP_FR_LABELS = frozenset(
+    {
+        "skill",
+        "umbrella",
+        "parent-fr",
+        "mrb-home",
+        "mrb_home",
+        "evergreen",
+        "evergreen-mrb",
+    }
+)
+_HARVEST_TITLE = re.compile(r"(?i)^(harvest|skill)\b")
+_SAFE_TO_CLOSE = re.compile(r"(?i)\bsafe\s+to\s+close\b")
 
 # Log-once set for no-match ACK reasons (cleared in tests).
 _ack_no_match_logged: set[str] = set()
@@ -89,6 +104,8 @@ class Claim:
     merged: bool | None = None
     require_machine: str = ""  # bobiverse#168: e.g. ionos for chair/outbox jobs
     author_seat: str = ""  # FR #224: worker nick that opened the PR (DONE FR path)
+    labels: tuple[str, ...] = ()
+    state: str = ""  # FR #709: open|closed stamped from GitHub
 
     @property
     def key(self) -> str:
@@ -308,6 +325,18 @@ def extract_closes_issue_ids(*texts: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _label_names(labels: list | tuple | None) -> tuple[str, ...]:
+    out: list[str] = []
+    for lab in labels or []:
+        if isinstance(lab, dict):
+            name = str(lab.get("name") or "").strip()
+        else:
+            name = str(lab or "").strip()
+        if name:
+            out.append(name)
+    return tuple(out)
+
+
 def is_evergreen_mrb_home(
     title: str,
     labels: list | tuple | None = None,
@@ -318,13 +347,67 @@ def is_evergreen_mrb_home(
     blob = f"{title or ''}\n{body or ''}"
     if _EVERGREEN_TITLE.search(title or "") or _EVERGREEN_TITLE.search(blob):
         return True
-    for lab in labels or []:
-        name = ""
-        if isinstance(lab, dict):
-            name = str(lab.get("name") or "")
-        else:
-            name = str(lab or "")
-        if name.strip().lower() in _EVERGREEN_LABELS:
+    labs = {n.lower() for n in _label_names(labels)}
+    return bool(labs & _EVERGREEN_LABELS)
+
+
+def issue_skip_fr_reason(
+    *,
+    title: str = "",
+    body: str = "",
+    labels: list | tuple | None = None,
+    state: str = "",
+) -> str | None:
+    """FR #709: why an issue must not be an assignable FR; None = ok.
+
+    Closed issues and SKIP_FR_LABELS / harvest / evergreen / safe-to-close.
+    ``needs-mrb1`` is intentionally not skipped (intake stamps it on every FR).
+    """
+    if (state or "").strip().lower() == "closed":
+        return "closed"
+    labs = {n.lower() for n in _label_names(labels)}
+    hit = labs & SKIP_FR_LABELS
+    if hit:
+        return f"label:{sorted(hit)[0]}"
+    title_s = (title or "").strip()
+    if _HARVEST_TITLE.match(title_s):
+        return "harvest_title"
+    blob = f"{title_s}\n{body or ''}"
+    if _SAFE_TO_CLOSE.search(blob):
+        return "safe_to_close"
+    if is_evergreen_mrb_home(title_s, labels, body=body or ""):
+        return "evergreen_mrb_home"
+    return None
+
+
+def row_skip_fr_reason(row: dict[str, Any]) -> str | None:
+    """Offer-time skip for FR rows (FR #709). Non-FR tasks are never skipped here."""
+    if str(row.get("task") or "").upper() not in ("FR", "PR"):
+        return None
+    labels = row.get("labels") or ()
+    if isinstance(labels, str):
+        labels = [labels]
+    title = str(row.get("title") or "").strip() or str(row.get("line") or "").strip()
+    return issue_skip_fr_reason(
+        title=title,
+        body=str(row.get("body") or ""),
+        labels=labels,
+        state=str(row.get("state") or ""),
+    )
+
+
+def fr_already_done(doc: dict[str, Any], repo: str, ident: str) -> bool:
+    """True when done[] already has a FR/PR row for this issue id."""
+    repo_s = _norm_repo(repo)
+    id_s = _norm_ident(ident)
+    for row in doc.get("done") or []:
+        if not isinstance(row, dict):
+            continue
+        if _norm_repo(str(row.get("repo") or "")) != repo_s:
+            continue
+        if _norm_ident(str(row.get("id") or "")) != id_s:
+            continue
+        if str(row.get("task") or "").upper() in ("FR", "PR"):
             return True
     return False
 
@@ -351,12 +434,18 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
         body = str(issue.get("body") or "")
         url = str(issue.get("html_url") or "")
         labels = issue.get("labels") or []
+        label_names = _label_names(labels)
+        state = str(issue.get("state") or "").strip().lower()
         if action in ("opened", "reopened"):
-            if is_evergreen_mrb_home(title, labels, body=body):
+            skip = issue_skip_fr_reason(
+                title=title, body=body, labels=label_names, state=state or "open"
+            )
+            if skip:
                 log.info(
-                    "event=skip_evergreen_fr repo=%s id=%s title=%s",
+                    "event=skip_fr repo=%s id=%s reason=%s title=%s",
                     full,
                     ident,
+                    skip,
                     title[:80],
                 )
                 return None
@@ -372,6 +461,8 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
                 line=title,
                 url=url,
                 require_machine=req,
+                labels=label_names,
+                state=state or "open",
             )
         if action == "closed":
             return Claim(
@@ -382,6 +473,8 @@ def claim_from_payload(event: str, payload: dict) -> Claim | None:
                 action=action,
                 line=title,
                 url=url,
+                labels=label_names,
+                state="closed",
             )
         return None
 
@@ -482,6 +575,10 @@ def _append_unaccepted(doc: dict, claim: Claim, **extra: Any) -> None:
         row["require_machine"] = str(claim.require_machine).strip().lower()
     if claim.author_seat:
         row["author_seat"] = str(claim.author_seat).strip()
+    if claim.labels:
+        row["labels"] = list(claim.labels)
+    if claim.state:
+        row["state"] = str(claim.state).strip().lower()
     row.update({k: v for k, v in extra.items() if v is not None})
     # de-dupe same key
     _remove_matching(
@@ -603,11 +700,17 @@ def _apply_queue_event_locked(home: Path, claim: Claim) -> str:
         return f"removed:{n}"
 
     if task == "FR":
-        # FR #133: evergreen / MRB-home boards never enter the FR offer queue.
-        if is_evergreen_mrb_home(claim.line, body=claim.line):
+        # FR #709 / #133: closed, skip-labels, harvest, evergreen never enter offer queue.
+        skip = issue_skip_fr_reason(
+            title=claim.line,
+            body=claim.line,
+            labels=claim.labels,
+            state=claim.state,
+        )
+        if skip:
             _remove_tasks_for_ids(doc, repo, (ident,), {"FR", "PR"})
             save_queue(home, doc)
-            return "skipped:FR:evergreen"
+            return f"skipped:FR:{skip}"
         # FR #134: open MRB that links this issue keeps FR out of the offerable queue.
         if fr_superseded_by_open_mrb(doc, repo, ident):
             _remove_tasks_for_ids(doc, repo, (ident,), {"FR", "PR", "UAT"})

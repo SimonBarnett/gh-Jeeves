@@ -29,7 +29,15 @@ from .nicks import (
     worker_shop_channel,
 )
 from .capability import row_blocked_for_machine
-from .queue import load_queue, ordered_unaccepted, tasks_equivalent, worker_state
+from .queue import (
+    fr_already_done,
+    load_queue,
+    ordered_unaccepted,
+    row_skip_fr_reason,
+    save_queue,
+    tasks_equivalent,
+    worker_state,
+)
 
 log = logging.getLogger("jeeves.assign")
 
@@ -397,6 +405,7 @@ class ChairAssignState:
             if isinstance(r, dict)
         }
         pick: dict[str, Any] | None = None
+        purge_keys: list[str] = []
         for row in ordered_unaccepted(home):
             if not isinstance(row, dict):
                 continue
@@ -404,6 +413,27 @@ class ChairAssignState:
             if key in accepted_keys:
                 continue
             if key in offered:
+                continue
+            # FR #709: never offer closed / skip-label / harvest / already-DONE FRs.
+            skip = row_skip_fr_reason(row)
+            if skip:
+                log.info(
+                    "event=offer_skip_fr nick=%s job=%s reason=%s",
+                    canon,
+                    key,
+                    skip,
+                )
+                purge_keys.append(key)
+                continue
+            if str(row.get("task") or "").upper() in ("FR", "PR") and fr_already_done(
+                q, str(row.get("repo") or ""), str(row.get("id") or "")
+            ):
+                log.info(
+                    "event=offer_skip_fr nick=%s job=%s reason=already_done",
+                    canon,
+                    key,
+                )
+                purge_keys.append(key)
                 continue
             # bobiverse#168: chair/outbox jobs only to the capable machine (ionos).
             if row_blocked_for_machine(row, nick):
@@ -426,6 +456,15 @@ class ChairAssignState:
                 continue
             pick = dict(row)
             break
+        if purge_keys:
+            before = list(q.get("unaccepted") or [])
+            q["unaccepted"] = [
+                r
+                for r in before
+                if not isinstance(r, dict) or row_key(r) not in set(purge_keys)
+            ]
+            if len(q["unaccepted"]) != len(before):
+                save_queue(home, q)
         if pick is None:
             # Distinguish empty vs all blocked (FR #141: strict focus with no
             # matching focused jobs also yields nothing queued).

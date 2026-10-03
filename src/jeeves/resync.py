@@ -278,14 +278,17 @@ def build_outstanding(
             if ident in superseded_fr:
                 continue
             title = str(issue.get("title") or "")[:120]
-            # FR #133: evergreen MRB-home boards never become FR jobs (resync path).
-            from .queue import is_evergreen_mrb_home
+            body = str(issue.get("body") or "")
+            labels = issue.get("labels") or []
+            # FR #709 / #133: closed, skip-labels, harvest, evergreen never become FR jobs.
+            from .queue import _label_names, issue_skip_fr_reason
 
-            if is_evergreen_mrb_home(
-                title,
-                issue.get("labels") or [],
-                body=str(issue.get("body") or ""),
-            ):
+            label_names = _label_names(labels)
+            state = str(issue.get("state") or "open").strip().lower() or "open"
+            skip = issue_skip_fr_reason(
+                title=title, body=body, labels=label_names, state=state
+            )
+            if skip:
                 continue
             rows.append(
                 {
@@ -298,6 +301,8 @@ def build_outstanding(
                     "seq": int(_created_ts(issue) * 1000) + int(num),
                     "event": "resync",
                     "action": "open_issue",
+                    "labels": list(label_names),
+                    "state": state,
                 }
             )
 
