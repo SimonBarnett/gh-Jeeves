@@ -134,21 +134,27 @@ def mrb_row_offerable(
     *,
     pr_exists: Callable[[str, str], bool] | None = None,
 ) -> bool:
-    """True when an MRB row has a resolvable pull URL (and optional live PR check)."""
+    """True when an MRB row has a resolvable pull URL (and optional live PR check).
+
+    The pull URL's owner/repo must match the queue row's ``repo`` (cross-repo
+    pull URLs are not offerable — bobiverse#247 / MRB #229 harden).
+    """
     if _norm_task(row) != "MRB":
         return True
     url = resolve_assign_url(row)
-    if not url or not _PR_URL_RE.search(url):
+    m = _PR_URL_RE.search(url) if url else None
+    if not url or not m:
         return False
     if _ISSUE_URL_RE.search(str(row.get("url") or "")) and not _PR_URL_RE.search(
         str(row.get("url") or "")
     ):
         return False
+    row_repo = str(row.get("repo") or "").strip()
+    url_repo = m.group(1)
+    if row_repo and url_repo.lower() != row_repo.lower():
+        return False
     if pr_exists is None:
         return True
-    m = _PR_URL_RE.search(url)
-    if not m:
-        return False
     repo, num = m.group(1), m.group(2)
     try:
         return bool(pr_exists(repo, num))
